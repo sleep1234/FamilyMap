@@ -1,0 +1,16 @@
+{
+  "name": "family-map",
+  "version": "0.1.0",
+  "description": "家人朋友位置共享应用 - 类Jagat果汁",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "dependencies": {
+    "docx": "^9.7.1",
+    "express": "^4.18.2",
+    "socket.io": "^4.7.2",
+    "sql.js": "^1.10.3"
+  }
+}

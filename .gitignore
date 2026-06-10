@@ -1,0 +1,68 @@
+# ==================== Flutter / Dart ====================
+*.class
+*.log
+*.pyc
+*.swp
+.DS_Store
+.atom/
+.build/
+.buildlog/
+.history
+.svn/
+.swiftpm/
+migrate_working_dir/
+
+# IntelliJ / VS Code
+*.iml
+*.ipr
+*.iws
+.idea/
+
+# Flutter/Dart/Pub
+**/doc/api/
+**/ios/Flutter/.last_build_id
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.pub-cache/
+.pub/
+/build/
+/coverage/
+
+# Symbolication & obfuscation
+app.*.symbols
+app.*.map.json
+
+# Android Studio build artifacts
+/android/app/debug
+/android/app/profile
+/android/app/release
+
+# ==================== Node.js ====================
+node_modules/
+package-lock.json
+
+# ==================== 数据库 & 敏感文件 ====================
+familymap.db
+*.db
+*.db-journal
+
+# 部署脚本（包含服务器密码等敏感信息）
+.temp/
+
+# 构建日志
+build_err*.txt
+build_err*.txt.bak
+build_log*.txt
+build_log*.txt.bak
+
+# 数据目录
+uploads/
+deploy/node_modules/
+deploy/package-lock.json
+
+# Python 缓存
+__pycache__/
+
+# 私有配置
+.env
