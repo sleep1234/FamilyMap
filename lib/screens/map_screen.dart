@@ -348,7 +348,15 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
   }
 
   /// 根据活动识别判断移动类型（优化阈值：步行1.0/骑行3.5/驾车8m/s）
+  /// 模拟模式下基于设定速度判断
   MovementType _getMovementType() {
+    // 模拟模式：直接用设定速度判断
+    if (_simMode) {
+      if (_simSpeedMs < 1.0) return MovementType.still;
+      if (_simSpeedMs < 3.5) return MovementType.walking;
+      if (_simSpeedMs < 8.0) return MovementType.cycling;
+      return MovementType.driving;
+    }
     switch (_currentActivity) {
       case ar.ActivityType.inVehicle:
         return MovementType.driving;
@@ -361,11 +369,11 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
       case ar.ActivityType.still:
         return MovementType.still;
       default:
-        // 活动识别不可用时，用滑动窗口平均速度判断
-        final avgSpeed = _getAverageSpeed();
-        if (avgSpeed < 1.0) return MovementType.still;    // 1.0m/s ≈ 3.6km/h
-        if (avgSpeed < 3.5) return MovementType.walking;   // 3.5m/s ≈ 12.6km/h
-        if (avgSpeed < 8.0) return MovementType.cycling;   // 8.0m/s ≈ 28.8km/h
+        // 活动识别不可用时，用有效速度判断
+        final spd = _effectiveSpeed;
+        if (spd < 1.0) return MovementType.still;
+        if (spd < 3.5) return MovementType.walking;
+        if (spd < 8.0) return MovementType.cycling;
         return MovementType.driving;
     }
   }
@@ -380,8 +388,10 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
   /// 获取当前有效速度（模拟模式直接用设定值，否则走滑动窗口）
   double get _effectiveSpeed => _simMode ? _simSpeedMs : (_isCurrentlyMoving ? _getAverageSpeed() : 0.0);
 
-  /// 当前是否在移动（活动识别 + 滑动窗口速度双判断）
+  /// 当前是否在移动（模拟模式直接看速度，否则活动识别 + 滑动窗口速度双判断）
   bool get _isCurrentlyMoving {
+    // 模拟模式：直接用设定速度判断
+    if (_simMode) return _simSpeedMs > 1.0;
     // 活动识别明确在移动
     if (_currentActivity == ar.ActivityType.inVehicle ||
         _currentActivity == ar.ActivityType.onBicycle ||
@@ -2125,7 +2135,7 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
       return Marker(
         point: pos,
         width: 80,
-        height: 110,
+        height: 130,
         child: MemberMarker(
           name: trail.name,
           color: trail.color,
@@ -2133,9 +2143,11 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
           isOnline: isOnline,
           isMoving: trail.isMoving,
           heading: trail.heading,
+          speedMs: trail.speed,
           movementType: trail.movementType,
           batteryLevel: member['battery_level'] as int?,
           isCharging: (member['is_charging'] ?? 0) == 1,
+          stayMinutes: member['stay_minutes'] as int?,
           onTap: () => _showMemberDetail(trail, member),
           index: markerIndex++,
         ),

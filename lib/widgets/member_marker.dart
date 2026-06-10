@@ -1,9 +1,8 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/physics.dart';
 import 'trail_particles.dart';
 
 /// 成员地图标记 - 家守 FamilyGuard 风格
-/// 动画增强：入场弹跳 + 在线脉冲呼吸灯 + 速度标签弹入 + 充电动画
+/// 设计规格：从上到下 = 速度标签(移动中) + 在线标签(在线) + 方形圆角头像 + 信息胶囊(停留时间|电池)
 class MemberMarker extends StatefulWidget {
   final String name;
   final Color color;
@@ -11,11 +10,13 @@ class MemberMarker extends StatefulWidget {
   final bool isOnline;
   final bool isMoving;
   final double heading; // 弧度
+  final double speedMs; // 速度 m/s
   final MovementType movementType;
   final int? batteryLevel;
   final bool? isCharging;
+  final int? stayMinutes; // 停留分钟数
   final VoidCallback? onTap;
-  final int index; // 交错入场用时序号
+  final int index;
 
   const MemberMarker({
     super.key,
@@ -25,9 +26,11 @@ class MemberMarker extends StatefulWidget {
     this.isOnline = true,
     this.isMoving = false,
     this.heading = 0,
+    this.speedMs = 0,
     this.movementType = MovementType.still,
     this.batteryLevel,
     this.isCharging,
+    this.stayMinutes,
     this.onTap,
     this.index = 0,
   });
@@ -38,89 +41,60 @@ class MemberMarker extends StatefulWidget {
 
 class _MemberMarkerState extends State<MemberMarker>
     with TickerProviderStateMixin {
-  // 1. 入场动画控制器
+  // 1. 入场动画
   late AnimationController _entranceCtrl;
   late Animation<double> _entranceScale;
   late Animation<double> _entranceY;
 
-  // 2. 脉冲呼吸灯控制器
+  // 2. 在线脉冲呼吸灯
   late AnimationController _pulseCtrl;
 
-  // 3. 速度标签弹入控制器
+  // 3. 速度标签弹入
   late AnimationController _speedTagCtrl;
 
-  // 4. 充电动画控制器
+  // 4. 充电动画
   late AnimationController _chargeCtrl;
-
-  bool _wasMoving = false;
 
   @override
   void initState() {
     super.initState();
 
-    // 1. 入场动画：从上方弹入 + back缓动
+    // 入场弹跳
     _entranceCtrl = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 700),
     );
     _entranceScale = Tween<double>(begin: 0.3, end: 1.0).animate(
-      CurvedAnimation(
-        parent: _entranceCtrl,
-        curve: const Cubic(0.34, 1.56, 0.64, 1), // back.out(1.7) 近似
-      ),
+      CurvedAnimation(parent: _entranceCtrl, curve: const Cubic(0.34, 1.56, 0.64, 1)),
     );
     _entranceY = Tween<double>(begin: -60, end: 0).animate(
-      CurvedAnimation(
-        parent: _entranceCtrl,
-        curve: Curves.easeOutCubic,
-      ),
+      CurvedAnimation(parent: _entranceCtrl, curve: Curves.easeOutCubic),
     );
-
-    // 延时交错入场
     Future.delayed(Duration(milliseconds: 150 * widget.index), () {
       if (mounted) _entranceCtrl.forward();
     });
 
-    // 2. 脉冲呼吸灯：2秒一次循环呼吸
-    _pulseCtrl = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 2000),
-    )..repeat();
+    // 脉冲呼吸灯 2s
+    _pulseCtrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 2000))
+      ..repeat();
 
-    // 3. 速度标签弹入
-    _speedTagCtrl = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 500),
-    );
-    if (widget.isMoving) {
-      _speedTagCtrl.forward();
-      _wasMoving = true;
-    }
+    // 速度标签弹入
+    _speedTagCtrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 500));
+    if (widget.isMoving) _speedTagCtrl.forward();
 
-    // 4. 充电动画
-    _chargeCtrl = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 1500),
-    );
-    if (widget.isCharging == true) {
-      _chargeCtrl.repeat(reverse: true);
-    }
+    // 充电动画
+    _chargeCtrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 1500));
+    if (widget.isCharging == true) _chargeCtrl.repeat(reverse: true);
   }
 
   @override
   void didUpdateWidget(covariant MemberMarker oldWidget) {
     super.didUpdateWidget(oldWidget);
-
-    // 速度状态变化时弹入速度标签
     if (widget.isMoving && !oldWidget.isMoving) {
       _speedTagCtrl.forward(from: 0);
-      _wasMoving = true;
     } else if (!widget.isMoving && oldWidget.isMoving) {
       _speedTagCtrl.reverse();
-      _wasMoving = false;
     }
-
-    // 充电状态变化
     if (widget.isCharging == true && oldWidget.isCharging != true) {
       _chargeCtrl.repeat(reverse: true);
     } else if (widget.isCharging != true && oldWidget.isCharging == true) {
@@ -143,18 +117,12 @@ class _MemberMarkerState extends State<MemberMarker>
       onTap: widget.onTap,
       child: TrailAnimatedBuilder(
         listenable: Listenable.merge([
-          _entranceCtrl,
-          _pulseCtrl,
-          _speedTagCtrl,
-          _chargeCtrl,
+          _entranceCtrl, _pulseCtrl, _speedTagCtrl, _chargeCtrl,
         ]),
         builder: (context, _) {
-          // 入场位移 + 缩放
           final entranceOn = _entranceCtrl.value < 1.0;
           return Transform.translate(
-            offset: entranceOn
-                ? Offset(0, _entranceY.value)
-                : Offset.zero,
+            offset: entranceOn ? Offset(0, _entranceY.value) : Offset.zero,
             child: Transform.scale(
               scale: _entranceScale.value,
               child: Opacity(
@@ -168,66 +136,45 @@ class _MemberMarkerState extends State<MemberMarker>
     );
   }
 
+  // ==================== 标记主体：从上到下 ====================
+
   Widget _buildMarkerContent() {
     return Column(
       mainAxisSize: MainAxisSize.min,
       children: [
-        // 速度标签弹入
-        if (widget.isMoving)
-          _buildSpeedTag(),
+        // 1. 速度标签（移动中才显示）
+        if (widget.isMoving) _buildSpeedTag(),
 
-        // 在线标签
-        if (widget.isOnline)
-          _buildOnlineTag(),
+        // 2. 在线标签（在线才显示）
+        if (widget.isOnline) _buildOnlineTag(),
 
-        // 头像 + 脉冲
+        // 3. 头像区域（在线脉冲 + 方形圆角头像）
         Stack(
           clipBehavior: Clip.none,
           alignment: Alignment.center,
           children: [
-            // 脉冲呼吸灯（仅在线时显示）
-            if (widget.isOnline)
-              _buildPulseRing(),
-            // 头像
-            if (widget.isMoving && widget.movementType == MovementType.driving)
-              Transform.rotate(
-                angle: widget.heading - 1.5708,
-                child: _buildDrivingIcon(),
-              )
-            else
-              _buildAvatarWithPin(),
+            if (widget.isOnline) _buildPulseRing(),
+            _buildAvatarSquare(),
           ],
         ),
 
-        // 名字标签
-        _buildNameLabel(),
+        // 4. 信息胶囊（停留时间 | 电池）
+        _buildInfoCapsule(),
       ],
     );
   }
 
-  /// 速度标签 - 弹性弹入动画
+  // ---- 1. 速度标签 ----
   Widget _buildSpeedTag() {
-    final speedKmh = (widget.movementType == MovementType.driving
-            ? 40
-            : widget.movementType == MovementType.cycling
-                ? 18
-                : widget.movementType == MovementType.walking
-                    ? 5
-                    : 0);
-
+    final speedKmh = (widget.speedMs * 3.6).toStringAsFixed(0);
     final tagColor = _speedTagColor();
-
-    // 弹入动画：从上方 8px 处 + 0.5 缩放弹入到 1.0
+    // 弹入动画
     final tagScale = Tween<double>(begin: 0.5, end: 1.0).animate(
-      CurvedAnimation(
-        parent: _speedTagCtrl,
-        curve: const Cubic(0.34, 2.0, 0.64, 1), // back.out(2) 近似
-      ),
+      CurvedAnimation(parent: _speedTagCtrl, curve: const Cubic(0.34, 2.0, 0.64, 1)),
     );
     final tagY = Tween<double>(begin: -8, end: 0).animate(
       CurvedAnimation(parent: _speedTagCtrl, curve: Curves.easeOut),
     );
-
     return Transform.translate(
       offset: Offset(0, tagY.value),
       child: Transform.scale(
@@ -242,11 +189,7 @@ class _MemberMarkerState extends State<MemberMarker>
             ),
             child: Text(
               '$speedKmh km/h',
-              style: const TextStyle(
-                fontSize: 10,
-                fontWeight: FontWeight.w700,
-                color: Colors.white,
-              ),
+              style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: Colors.white),
             ),
           ),
         ),
@@ -254,7 +197,7 @@ class _MemberMarkerState extends State<MemberMarker>
     );
   }
 
-  /// 在线小标签
+  // ---- 2. 在线标签 ----
   Widget _buildOnlineTag() {
     return Container(
       margin: const EdgeInsets.only(bottom: 3),
@@ -265,76 +208,36 @@ class _MemberMarkerState extends State<MemberMarker>
       ),
       child: const Text(
         '在线',
-        style: TextStyle(
-          fontSize: 9,
-          fontWeight: FontWeight.w700,
-          color: Color(0xFF2563EB),
-        ),
+        style: TextStyle(fontSize: 9, fontWeight: FontWeight.w700, color: Color(0xFF2563EB)),
       ),
     );
   }
 
-  /// 脉冲呼吸灯 - 多层环形波纹从头像向外扩散
-  Widget _buildPulseRing() {
-    final ringColor = widget.isMe
-        ? const Color(0xFF4A90D9)
-        : widget.color;
+  // ---- 3. 方形圆角头像 ----
+  Widget _buildAvatarSquare() {
+    final size = 44.0;
+    final radius = 12.0;
 
-    return CustomPaint(
-      size: const Size(70, 70),
-      painter: _PulseRingPainter(
-        progress: _pulseCtrl.value,
-        color: ringColor,
-      ),
-    );
-  }
-
-  /// 头像 + 底部尖角
-  Widget _buildAvatarWithPin() {
-    if (widget.isMe) {
-      return Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          _buildAvatarCircle(),
-          CustomPaint(
-            size: const Size(14, 8),
-            painter: _PinPainter(color: const Color(0xFF4A90D9)),
-          ),
-        ],
-      );
-    } else {
-      return _buildAvatarCircle();
-    }
-  }
-
-  /// 头像圆形
-  Widget _buildAvatarCircle() {
     // 离线
     if (!widget.isOnline) {
       return Container(
-        width: 48,
-        height: 48,
+        width: size, height: size,
         decoration: BoxDecoration(
-          shape: BoxShape.circle,
+          borderRadius: BorderRadius.circular(radius),
           color: Colors.grey.shade600.withOpacity(0.6),
           border: Border.all(color: Colors.grey.shade500, width: 2),
         ),
         child: Center(
           child: Text(
             widget.name.isNotEmpty ? widget.name[0].toUpperCase() : '?',
-            style: TextStyle(
-              color: Colors.white.withOpacity(0.8),
-              fontSize: 20,
-              fontWeight: FontWeight.w800,
-            ),
+            style: TextStyle(color: Colors.white.withOpacity(0.8), fontSize: 18, fontWeight: FontWeight.w800),
           ),
         ),
       );
     }
 
-    // 自己 - 蓝色粗描边 + 外发光
+    // 自己（蓝色粗边框 + 外发光）
     if (widget.isMe) {
-      // 充电光晕
       final chargeGlow = widget.isCharging == true
           ? BoxShadow(
               color: const Color(0xFF34C759).withOpacity(0.3 + 0.3 * _chargeCtrl.value),
@@ -344,21 +247,13 @@ class _MemberMarkerState extends State<MemberMarker>
           : const BoxShadow(color: Colors.transparent);
 
       return Container(
-        width: 48,
-        height: 48,
+        width: size, height: size,
         decoration: BoxDecoration(
-          shape: BoxShape.circle,
+          borderRadius: BorderRadius.circular(radius),
           color: widget.color,
-          border: Border.all(
-            color: const Color(0xFF4A90D9),
-            width: 3,
-          ),
+          border: Border.all(color: const Color(0xFF4A90D9), width: 3),
           boxShadow: [
-            BoxShadow(
-              color: const Color(0xFF4A90D9).withOpacity(0.5),
-              blurRadius: 10,
-              spreadRadius: 2,
-            ),
+            BoxShadow(color: const Color(0xFF4A90D9).withOpacity(0.5), blurRadius: 10, spreadRadius: 2),
             chargeGlow,
           ],
         ),
@@ -367,30 +262,21 @@ class _MemberMarkerState extends State<MemberMarker>
               ? _buildChargingIcon()
               : Text(
                   widget.name.isNotEmpty ? widget.name[0].toUpperCase() : '?',
-                  style: const TextStyle(
-                    color: Colors.white,
-                    fontSize: 20,
-                    fontWeight: FontWeight.w800,
-                  ),
+                  style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w800),
                 ),
         ),
       );
     }
 
-    // 在线好友 - 白色细边框
+    // 在线好友（白色细边框）
     return Container(
-      width: 48,
-      height: 48,
+      width: size, height: size,
       decoration: BoxDecoration(
-        shape: BoxShape.circle,
+        borderRadius: BorderRadius.circular(radius),
         color: widget.color,
         border: Border.all(color: Colors.white, width: 2),
         boxShadow: [
-          BoxShadow(
-            color: widget.color.withOpacity(0.4),
-            blurRadius: 6,
-            spreadRadius: 1,
-          ),
+          BoxShadow(color: widget.color.withOpacity(0.4), blurRadius: 6, spreadRadius: 1),
         ],
       ),
       child: Center(
@@ -398,175 +284,218 @@ class _MemberMarkerState extends State<MemberMarker>
             ? _buildChargingIcon()
             : Text(
                 widget.name.isNotEmpty ? widget.name[0].toUpperCase() : '?',
-                style: const TextStyle(
-                  color: Colors.white,
-                  fontSize: 20,
-                  fontWeight: FontWeight.w800,
-                ),
+                style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w800),
               ),
       ),
     );
   }
 
-  /// 充电动画图标 - 闪电呼吸效果
-  Widget _buildChargingIcon() {
-    final boltOpacity = 0.5 + 0.5 * _chargeCtrl.value; // 0.5~1.0 呼吸
-    return Icon(
-      Icons.bolt,
-      color: Colors.white.withOpacity(boltOpacity),
-      size: 22,
-    );
-  }
-
-  /// 名字标签
-  Widget _buildNameLabel() {
-    // 离线用户
+  // ---- 4. 信息胶囊 ----
+  Widget _buildInfoCapsule() {
+    // 离线用户不显示信息胶囊
     if (!widget.isOnline) {
-      return ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 80),
-        child: Container(
-          margin: const EdgeInsets.only(top: 2),
-          padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
-          decoration: BoxDecoration(
-            color: Colors.grey.shade700,
-            borderRadius: BorderRadius.circular(4),
-          ),
-          child: Text(
-            widget.isMe ? '我' : widget.name,
-            style: TextStyle(
-              color: Colors.white.withOpacity(0.6),
-              fontSize: 10,
-              fontWeight: FontWeight.w400,
-            ),
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            textAlign: TextAlign.center,
-          ),
-        ),
-      );
+      return _buildNameOnly();
     }
 
-    // 在线用户
-    return ConstrainedBox(
-      constraints: const BoxConstraints(maxWidth: 80),
-      child: Container(
-        margin: const EdgeInsets.only(top: 2),
-        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
-        decoration: BoxDecoration(
-          color: Colors.black87,
-          borderRadius: BorderRadius.circular(4),
-        ),
-        child: Text(
-          widget.isMe ? '我' : widget.name,
-          style: const TextStyle(
-            color: Colors.white,
-            fontSize: 10,
-            fontWeight: FontWeight.w500,
-          ),
-          maxLines: 1,
-          overflow: TextOverflow.ellipsis,
-          textAlign: TextAlign.center,
-        ),
-      ),
-    );
-  }
+    final stayText = _formatStayTime(widget.stayMinutes);
+    final batteryLevel = widget.batteryLevel;
+    final isCharging = widget.isCharging == true;
 
-  /// 驾车图标
-  Widget _buildDrivingIcon() {
     return Container(
-      width: 48,
-      height: 48,
+      margin: const EdgeInsets.only(top: 3),
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
       decoration: BoxDecoration(
-        shape: BoxShape.circle,
-        color: widget.color,
-        border: widget.isMe
-            ? Border.all(color: const Color(0xFF4A90D9), width: 3)
-            : Border.all(color: Colors.white, width: 2),
-        boxShadow: [
-          BoxShadow(
-            color: widget.color.withOpacity(0.6),
-            blurRadius: 12,
-            spreadRadius: 3,
-          ),
+        color: Colors.black87,
+        borderRadius: BorderRadius.circular(10),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // 停留时间
+          if (stayText != null) ...[
+            Text(stayText, style: const TextStyle(color: Colors.white70, fontSize: 9, fontWeight: FontWeight.w500)),
+            const SizedBox(width: 4),
+            // 分隔竖线
+            Container(width: 1, height: 10, color: Colors.white24),
+            const SizedBox(width: 4),
+          ],
+          // 电池图标 + 百分比
+          if (batteryLevel != null) _buildBatteryIndicator(batteryLevel, isCharging),
         ],
       ),
-      child: const Center(
-        child: Icon(
-          Icons.directions_car,
-          color: Colors.white,
-          size: 22,
-        ),
+    );
+  }
+
+  /// 离线用户只显示名字
+  Widget _buildNameOnly() {
+    return Container(
+      margin: const EdgeInsets.only(top: 2),
+      padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+      decoration: BoxDecoration(
+        color: Colors.grey.shade700,
+        borderRadius: BorderRadius.circular(4),
+      ),
+      child: Text(
+        widget.isMe ? '我' : widget.name,
+        style: TextStyle(color: Colors.white.withOpacity(0.6), fontSize: 10, fontWeight: FontWeight.w400),
+        maxLines: 1, overflow: TextOverflow.ellipsis,
       ),
     );
   }
 
-  /// 速度标签颜色
+  // ---- 电池指示器 ----
+  Widget _buildBatteryIndicator(int level, bool charging) {
+    // 电池颜色
+    Color batteryColor;
+    if (level > 50) {
+      batteryColor = const Color(0xFF34C759);
+    } else if (level > 20) {
+      batteryColor = const Color(0xFFFFC107);
+    } else {
+      batteryColor = const Color(0xFFFF6B6B);
+    }
+
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: [
+        // 电池外壳
+        CustomPaint(
+          size: const Size(16, 10),
+          painter: _BatteryPainter(
+            level: level / 100.0,
+            color: batteryColor,
+            showBolt: charging,
+            boltOpacity: charging ? 0.5 + 0.5 * _chargeCtrl.value : 0,
+          ),
+        ),
+        const SizedBox(width: 2),
+        Text('$level%', style: TextStyle(color: batteryColor, fontSize: 9, fontWeight: FontWeight.w600)),
+      ],
+    );
+  }
+
+  // ---- 脉冲呼吸灯 ----
+  Widget _buildPulseRing() {
+    final ringColor = widget.isMe ? const Color(0xFF4A90D9) : widget.color;
+    return CustomPaint(
+      size: const Size(68, 68),
+      painter: _PulseRingPainter(progress: _pulseCtrl.value, color: ringColor),
+    );
+  }
+
+  // ---- 充电闪电图标 ----
+  Widget _buildChargingIcon() {
+    final boltOpacity = 0.5 + 0.5 * _chargeCtrl.value;
+    return Icon(Icons.bolt, color: Colors.white.withOpacity(boltOpacity), size: 20);
+  }
+
+  // ---- 工具方法 ----
+
+  String? _formatStayTime(int? minutes) {
+    if (minutes == null || minutes <= 0) return null;
+    if (minutes < 60) return '$minutes分钟';
+    final hours = minutes ~/ 60;
+    final mins = minutes % 60;
+    if (hours < 24) return mins > 0 ? '${hours}h${mins}m' : '${hours}小时';
+    final days = hours ~/ 24;
+    final remainHours = hours % 24;
+    return remainHours > 0 ? '${days}d${remainHours}h' : '${days}天';
+  }
+
   Color _speedTagColor() {
     switch (widget.movementType) {
-      case MovementType.walking:
-        return const Color(0xFF4CAF50); // 绿色
-      case MovementType.cycling:
-        return const Color(0xFFFF9800); // 橙色
-      case MovementType.driving:
-        return const Color(0xFFF44336); // 红色
-      case MovementType.still:
-        return const Color(0xFF9E9E9E); // 灰色
+      case MovementType.walking: return const Color(0xFF4CAF50);
+      case MovementType.cycling: return const Color(0xFFFF9800);
+      case MovementType.driving: return const Color(0xFFF44336);
+      case MovementType.still: return const Color(0xFF9E9E9E);
     }
   }
 }
 
-/// 脉冲呼吸灯画笔 - 多层环形波纹从头像中心向外扩散
+// ==================== 脉冲呼吸灯画笔 ====================
 class _PulseRingPainter extends CustomPainter {
-  final double progress; // 0.0 ~ 1.0，一圈动画周期
+  final double progress;
   final Color color;
-
   _PulseRingPainter({required this.progress, required this.color});
 
   @override
   void paint(Canvas canvas, Size size) {
     final center = Offset(size.width / 2, size.height / 2);
-    final baseRadius = 24.0; // 头像半径
-
-    // 绘制2层脉冲环，间隔0.4
+    final baseRadius = 22.0; // 方形圆角头像半径约22
     for (int i = 0; i < 2; i++) {
       final phase = (progress + i * 0.4) % 1.0;
-      final scale = 1.0 + phase * 0.6; // 1.0 → 1.6 扩散
-      final opacity = (1.0 - phase) * 0.5; // 0.5 → 0 消隐
-
+      final scale = 1.0 + phase * 0.6;
+      final opacity = (1.0 - phase) * 0.5;
       final paint = Paint()
         ..color = color.withOpacity(opacity)
         ..style = PaintingStyle.stroke
         ..strokeWidth = 2;
-
       canvas.drawCircle(center, baseRadius * scale, paint);
     }
   }
 
   @override
-  bool shouldRepaint(covariant _PulseRingPainter old) =>
-      old.progress != progress;
+  bool shouldRepaint(covariant _PulseRingPainter old) => old.progress != progress;
 }
 
-/// 底部尖角画笔 - 蓝色小三角
-class _PinPainter extends CustomPainter {
+// ==================== 电池图标画笔 ====================
+class _BatteryPainter extends CustomPainter {
+  final double level; // 0.0 ~ 1.0
   final Color color;
-  _PinPainter({required this.color});
+  final bool showBolt;
+  final double boltOpacity;
+  _BatteryPainter({
+    required this.level,
+    required this.color,
+    required this.showBolt,
+    required this.boltOpacity,
+  });
 
   @override
   void paint(Canvas canvas, Size size) {
-    final paint = Paint()
-      ..color = color
-      ..style = PaintingStyle.fill;
+    final paint = Paint()..style = PaintingStyle.stroke..strokeWidth = 1.2..color = Colors.white70;
+    final fillPaint = Paint()..style = PaintingStyle.fill..color = color;
 
-    final path = Path()
-      ..moveTo(0, 0)
-      ..lineTo(size.width / 2, size.height)
-      ..lineTo(size.width, 0)
-      ..close();
+    // 外壳 (圆角矩形)
+    final bodyRect = RRect.fromRectAndRadius(
+      Rect.fromLTWH(0, 1, size.width - 3, size.height - 2),
+      const Radius.circular(2),
+    );
+    canvas.drawRRect(bodyRect, paint);
 
-    canvas.drawPath(path, paint);
+    // 右侧小正极凸起
+    canvas.drawRect(Rect.fromLTWH(size.width - 2.5, 3, 2, size.height - 6), paint);
+
+    // 内部填充
+    final fillWidth = (size.width - 5) * level.clamp(0.0, 1.0);
+    if (fillWidth > 0) {
+      final fillRect = RRect.fromRectAndRadius(
+        Rect.fromLTWH(1, 2, fillWidth, size.height - 4),
+        const Radius.circular(1),
+      );
+      canvas.drawRRect(fillRect, fillPaint);
+    }
+
+    // 充电闪电
+    if (showBolt) {
+      final boltPaint = Paint()
+        ..color = Colors.white.withOpacity(boltOpacity)
+        ..style = PaintingStyle.fill;
+      final cx = size.width / 2 - 1;
+      final cy = size.height / 2;
+      final path = Path()
+        ..moveTo(cx - 1, cy - 3)
+        ..lineTo(cx + 1.5, cy - 0.5)
+        ..lineTo(cx, cy - 0.5)
+        ..lineTo(cx + 1, cy + 3)
+        ..lineTo(cx - 1.5, cy + 0.5)
+        ..lineTo(cx, cy + 0.5)
+        ..close();
+      canvas.drawPath(path, boltPaint);
+    }
   }
 
   @override
-  bool shouldRepaint(covariant CustomPainter oldDelegate) => false;
+  bool shouldRepaint(covariant _BatteryPainter old) =>
+      old.level != level || old.boltOpacity != boltOpacity;
 }
