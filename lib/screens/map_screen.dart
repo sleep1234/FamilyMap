@@ -1396,6 +1396,19 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
                 _toggleHeatmap,
                 color: _showHeatmap ? Colors.blue : null,
               ),
+              const SizedBox(height: 8),
+              // 模拟驾驶切换按钮
+              _zoomButton(
+                Icons.directions_car,
+                () {
+                  if (_simMode) {
+                    _stopSimMode();
+                  } else {
+                    _startSimMode();
+                  }
+                },
+                color: _simMode ? Colors.orange : null,
+              ),
             ],
           ),
         ),
@@ -2011,10 +2024,6 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
     )).then((result) {
       _loadSettings();
       _loadGpsDebugFlag();
-      // 处理模拟驾驶开关
-      if (result == 'start_sim' && !_simMode) {
-        _startSimMode();
-      }
     });
   }
 

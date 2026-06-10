@@ -248,18 +248,6 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   },
                 ),
 
-                // 模拟驾驶开关
-                SwitchListTile(
-                  secondary: const Icon(Icons.directions_car),
-                  title: const Text('模拟驾驶'),
-                  subtitle: const Text('用摇杆模拟移动，室内测试拖尾和测速'),
-                  value: false,
-                  onChanged: (v) {
-                    // 返回地图页时自动处理
-                    Navigator.pop(context, v ? 'start_sim' : null);
-                  },
-                ),
-
                 // GPS日志导出（仅调试开启时显示）
                 if (_gpsDebugEnabled)
                   ListTile(
