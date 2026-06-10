@@ -377,6 +377,9 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
     return sum / _speedWindow.length;
   }
 
+  /// 获取当前有效速度（模拟模式直接用设定值，否则走滑动窗口）
+  double get _effectiveSpeed => _simMode ? _simSpeedMs : (_isCurrentlyMoving ? _getAverageSpeed() : 0.0);
+
   /// 当前是否在移动（活动识别 + 滑动窗口速度双判断）
   bool get _isCurrentlyMoving {
     // 活动识别明确在移动
@@ -438,7 +441,7 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
           latitude: _currentPosition!.latitude,
           longitude: _currentPosition!.longitude,
           accuracy: _currentPosition!.accuracy,
-          speed: _isCurrentlyMoving ? _getAverageSpeed() : 0.0,
+          speed: _effectiveSpeed,
         );
       }
     });
@@ -486,7 +489,7 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
             latitude: _currentPosition!.latitude,
             longitude: _currentPosition!.longitude,
             accuracy: _currentPosition!.accuracy,
-            speed: _isCurrentlyMoving ? _getAverageSpeed() : 0.0,
+            speed: _effectiveSpeed,
           );
         }
       });
@@ -530,8 +533,8 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
       GpsDebugLogger.instance.log(entry);
     }
 
-    // 更新速度滑动窗口（低精度GPS不加入窗口，避免污染速度平均值）
-    if (pos.accuracy <= 50) {
+    // 2. 仅非模拟模式下更新速度滑动窗口（模拟模式用 _simSpeedMs 直接上报）
+    if (!_simMode && pos.accuracy <= 50) {
       _speedWindow.add(pos.speed);
       if (_speedWindow.length > _speedWindowSize) {
         _speedWindow.removeAt(0);
@@ -544,7 +547,8 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
     // 自适应上报频率：检查是否需要调整
     _updateReportInterval();
 
-    final effectiveSpeed = _isCurrentlyMoving ? _getAverageSpeed() : 0.0;
+    // 模拟模式直接用设定速度，不走滑动窗口平均
+    final effectiveSpeed = _effectiveSpeed;
 
     _socketService.sendLocationUpdate(
       userId: widget.currentUser.id,
@@ -2319,7 +2323,7 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
         _currentPosition!.longitude,
         trail.currentPos.latitude,
         trail.currentPos.longitude,
-        speed: _isCurrentlyMoving ? _getAverageSpeed() : 1.0, // 默认步行速度
+        speed: _simMode ? _simSpeedMs : (_isCurrentlyMoving ? _getAverageSpeed() : 1.0), // 默认步行速度
       );
       if (!mounted) return;
       final distanceKm = (result['distanceKm'] as num).toStringAsFixed(1);
