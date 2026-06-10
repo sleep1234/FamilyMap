@@ -300,6 +300,12 @@ class _MemberMarkerState extends State<MemberMarker>
     final stayText = _formatStayTime(widget.stayMinutes);
     final batteryLevel = widget.batteryLevel;
     final isCharging = widget.isCharging == true;
+    final hasBoth = stayText != null && batteryLevel != null;
+
+    // 都没有时只显示名字
+    if (stayText == null && batteryLevel == null) {
+      return _buildNameOnly();
+    }
 
     return Container(
       margin: const EdgeInsets.only(top: 3),
@@ -312,10 +318,11 @@ class _MemberMarkerState extends State<MemberMarker>
         mainAxisSize: MainAxisSize.min,
         children: [
           // 停留时间
-          if (stayText != null) ...[
+          if (stayText != null)
             Text(stayText, style: const TextStyle(color: Colors.white70, fontSize: 9, fontWeight: FontWeight.w500)),
+          // 分隔竖线（两者都有时才显示）
+          if (hasBoth) ...[
             const SizedBox(width: 4),
-            // 分隔竖线
             Container(width: 1, height: 10, color: Colors.white24),
             const SizedBox(width: 4),
           ],

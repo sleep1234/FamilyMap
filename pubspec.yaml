@@ -37,6 +37,7 @@ dependencies:
   activity_recognition_flutter: ^6.0.0
   polylabel: ^1.0.1
   path_provider: ^2.1.5
+  battery_plus: ^7.0.0
 
 dev_dependencies:
   flutter_test:

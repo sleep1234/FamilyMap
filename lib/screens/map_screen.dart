@@ -7,6 +7,7 @@ import 'package:geolocator/geolocator.dart';
 import 'package:flutter/services.dart';
 import 'package:activity_recognition_flutter/activity_recognition_flutter.dart' as ar;
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:battery_plus/battery_plus.dart';
 import '../models/models.dart';
 import '../services/socket_service.dart';
 import '../services/api_service.dart';
@@ -91,6 +92,12 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
   bool _simMoving = false;      // 摇杆是否按下
   Timer? _simTimer;             // 模拟位置生成定时器
 
+  // 电池信息
+  final Battery _battery = Battery();
+  int? _myBatteryLevel;
+  bool _myCharging = false;
+  StreamSubscription<BatteryState>? _batterySub;
+
   // 可拖动底部面板 - 三档弹簧吸附
   double _panelHeight = 100;
   static const double _panelPeek = 100;   // 只显示Tab栏
@@ -138,6 +145,7 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
     _socketService.connect(widget.currentUser.id);
     _listenSocketEvents();
     _initActivityRecognition();
+    _initBattery();
   }
 
   Future<void> _loadGpsDebugFlag() async {
@@ -157,6 +165,7 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
     _gpsRetryTimer?.cancel();
     _simTimer?.cancel();
     _activityStream?.cancel();
+    _batterySub?.cancel();
     _socketService.disconnect();
     _socketService.dispose();
     super.dispose();
@@ -255,6 +264,8 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
         longitude: pos.longitude,
         accuracy: pos.accuracy,
         speed: pos.speed,
+        batteryLevel: _myBatteryLevel,
+        isCharging: _myCharging,
       );
     }
   }
@@ -318,6 +329,29 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
   // ==================== 活动识别（对标Jagat）====================
 
   /// 初始化活动识别，监听系统对用户当前活动类型的判断
+  /// 初始化电池信息监听
+  Future<void> _initBattery() async {
+    try {
+      _myBatteryLevel = await _battery.batteryLevel;
+      final state = await _battery.batteryState;
+      _myCharging = state == BatteryState.charging;
+      if (mounted) setState(() {});
+
+      // 监听电池状态变化
+      _batterySub = _battery.onBatteryStateChanged.listen((state) async {
+        final level = await _battery.batteryLevel;
+        if (mounted) {
+          setState(() {
+            _myBatteryLevel = level;
+            _myCharging = state == BatteryState.charging;
+          });
+        }
+      });
+    } catch (e) {
+      debugPrint('[电池] 获取电池信息失败: $e');
+    }
+  }
+
   Future<void> _initActivityRecognition() async {
     try {
       final activityRecognition = ar.ActivityRecognition();
@@ -452,6 +486,8 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
           longitude: _currentPosition!.longitude,
           accuracy: _currentPosition!.accuracy,
           speed: _effectiveSpeed,
+          batteryLevel: _myBatteryLevel,
+          isCharging: _myCharging,
         );
       }
     });
@@ -500,6 +536,8 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
             longitude: _currentPosition!.longitude,
             accuracy: _currentPosition!.accuracy,
             speed: _effectiveSpeed,
+            batteryLevel: _myBatteryLevel,
+            isCharging: _myCharging,
           );
         }
       });
@@ -565,7 +603,9 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
       latitude: pos.latitude,
       longitude: pos.longitude,
       accuracy: pos.accuracy,
-      speed: effectiveSpeed, // 使用滑动窗口平均速度
+      speed: effectiveSpeed,
+      batteryLevel: _myBatteryLevel,
+      isCharging: _myCharging,
     );
     _lastReportedPosition = pos;
 
@@ -2132,6 +2172,9 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
       );
       final isOnline = _onlineMembers.contains(trail.userId);
       final pos = adjustedPositions[trail.userId] ?? trail.currentPos;
+      // 自己直接用本机电池数据，好友用 member 里的
+      final battery = isMe ? _myBatteryLevel : (member['battery_level'] as int?);
+      final charging = isMe ? _myCharging : ((member['is_charging'] ?? 0) == 1);
       return Marker(
         point: pos,
         width: 80,
@@ -2145,8 +2188,8 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
           heading: trail.heading,
           speedMs: trail.speed,
           movementType: trail.movementType,
-          batteryLevel: member['battery_level'] as int?,
-          isCharging: (member['is_charging'] ?? 0) == 1,
+          batteryLevel: battery,
+          isCharging: charging,
           stayMinutes: member['stay_minutes'] as int?,
           onTap: () => _showMemberDetail(trail, member),
           index: markerIndex++,
