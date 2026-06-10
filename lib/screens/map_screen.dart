@@ -13,6 +13,7 @@ import '../services/api_service.dart';
 import '../services/gps_debug_logger.dart';
 import '../widgets/trail_particles.dart';
 import '../widgets/member_marker.dart';
+import '../widgets/sim_controller.dart';
 import 'chat_screen.dart';
 import 'settings_screen.dart';
 import 'footprint_screen.dart';
@@ -83,6 +84,13 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
   String _gpsInitStatus = '未初始化'; // 供调试框显示
   bool _gpsStreamActive = false; // 位置流是否已启动
 
+  // 模拟驾驶模式（室内测试拖尾/测速/碰撞检测）
+  bool _simMode = false;
+  double _simBearing = 0;       // 当前模拟方位角（度）
+  double _simSpeedMs = 1.5;     // 当前模拟速度 m/s
+  bool _simMoving = false;      // 摇杆是否按下
+  Timer? _simTimer;             // 模拟位置生成定时器
+
   // 可拖动底部面板 - 三档弹簧吸附
   double _panelHeight = 100;
   static const double _panelPeek = 100;   // 只显示Tab栏
@@ -147,6 +155,7 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
     _geocodeDebounce?.cancel();
     _stayTimer?.cancel();
     _gpsRetryTimer?.cancel();
+    _simTimer?.cancel();
     _activityStream?.cancel();
     _socketService.disconnect();
     _socketService.dispose();
@@ -1187,6 +1196,8 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
             ),
             // GPS调试浮窗
             if (_gpsDebugEnabled) _buildGpsDebugOverlay(),
+            // 模拟驾驶浮窗
+            if (_simMode) _buildSimOverlay(),
           ],
         ),
       ),
@@ -1997,9 +2008,13 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
         darkMode: widget.darkMode,
         onDarkModeChanged: widget.onDarkModeChanged,
       ),
-    )).then((_) {
+    )).then((result) {
       _loadSettings();
-      _loadGpsDebugFlag(); // 从设置页返回时刷新调试开关状态
+      _loadGpsDebugFlag();
+      // 处理模拟驾驶开关
+      if (result == 'start_sim' && !_simMode) {
+        _startSimMode();
+      }
     });
   }
 
@@ -2731,6 +2746,125 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
         _selectCircle(Circle.fromJson(result['circle']));
       }
     }
+  }
+
+  // ==================== 模拟驾驶模式 ====================
+
+  /// 开启模拟模式
+  void _startSimMode() {
+    if (_simMode) return;
+    _simMode = true;
+    _gpsInitStatus = '模拟模式';
+    _gpsStreamActive = false;
+    // 暂停真实 GPS 流
+    _positionStream?.cancel();
+    _isLocationSharing = false;
+    setState(() {});
+
+    // 如果还没有当前位置，用地图中心
+    if (_currentPosition == null) {
+      final center = _mapController.camera.center;
+      _currentPosition = Position(
+        latitude: center.latitude,
+        longitude: center.longitude,
+        timestamp: DateTime.now(),
+        accuracy: 5.0,
+        altitude: 0,
+        altitudeAccuracy: 0,
+        heading: 0,
+        headingAccuracy: 0,
+        speed: 0,
+        speedAccuracy: 0,
+        isMocked: true,
+      );
+      // 初始化自己的 trail
+      final myKey = widget.currentUser.id;
+      if (!_memberTrails.containsKey(myKey)) {
+        final gcjPos = _wgs84ToGcj02(center.latitude, center.longitude);
+        _memberTrails[myKey] = MemberTrail(
+          userId: myKey,
+          name: widget.currentUser.name,
+          color: _parseColor(widget.currentUser.avatarColor),
+          currentPos: gcjPos,
+        );
+      }
+    }
+
+    // 启动模拟位置生成定时器（每500ms一个点）
+    _simTimer?.cancel();
+    _simTimer = Timer.periodic(const Duration(milliseconds: 500), (_) {
+      if (!_simMoving) return; // 摇杆松开时不生成
+      _generateSimPosition();
+    });
+
+    debugPrint('[模拟] 模拟驾驶模式已开启');
+  }
+
+  /// 关闭模拟模式，恢复真实GPS
+  void _stopSimMode() {
+    _simMode = false;
+    _simTimer?.cancel();
+    _simTimer = null;
+    _simMoving = false;
+    setState(() {});
+    // 恢复真实 GPS
+    _startLocationSharing();
+    debugPrint('[模拟] 模拟驾驶模式已关闭，恢复GPS');
+  }
+
+  /// 模拟控制器回调
+  void _onSimUpdate({required double bearing, required double speedMs, required bool isMoving}) {
+    _simBearing = bearing;
+    _simSpeedMs = speedMs;
+    _simMoving = isMoving;
+  }
+
+  /// 生成一个模拟位置点并注入到管道
+  void _generateSimPosition() {
+    if (_currentPosition == null) return;
+
+    final dt = 0.5; // 500ms 间隔
+    final dist = _simSpeedMs * dt; // 移动距离（米）
+    final bearingRad = _simBearing * pi / 180;
+
+    // 根据方位角和距离计算新经纬度
+    final lat = _currentPosition!.latitude;
+    final lng = _currentPosition!.longitude;
+    final deltaLat = dist * cos(bearingRad) / 111320.0;
+    final deltaLng = dist * sin(bearingRad) / (111320.0 * cos(lat * pi / 180));
+
+    final newPos = Position(
+      latitude: lat + deltaLat,
+      longitude: lng + deltaLng,
+      timestamp: DateTime.now(),
+      accuracy: 5.0, // 模拟信号精精度很高
+      altitude: 0,
+      altitudeAccuracy: 0,
+      heading: _simBearing,
+      headingAccuracy: 0,
+      speed: _simSpeedMs,
+      speedAccuracy: 0.5,
+      isMocked: true,
+    );
+
+    // 地图跟随移动
+    final gcjPos = _wgs84ToGcj02(newPos.latitude, newPos.longitude);
+    _mapController.move(gcjPos, _mapController.camera.zoom);
+
+    // 直接注入位置处理管道
+    _handlePositionUpdate(newPos, forceUpdate: true);
+  }
+
+  /// 构建模拟控制浮窗
+  Widget _buildSimOverlay() {
+    return Positioned(
+      left: 12,
+      bottom: 170,
+      child: SimControlPanel(
+        onSimUpdate: _onSimUpdate,
+        onStop: _stopSimMode,
+      ),
+    );
   }
 
   // ==================== 工具方法 ====================
