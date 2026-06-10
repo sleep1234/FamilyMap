@@ -50,9 +50,9 @@ class MemberTrail {
   DateTime? lastUpdate;
   MovementType? overrideMovementType;
 
-  // 轨迹历史点（最多保留80个，约行驶模式的5分钟）
+  // 轨迹历史点（最多保留120个，约行驶模式的8分钟，拖尾更长）
   final List<TrailPoint> _trailPoints = [];
-  static const int _maxTrailPoints = 80;
+  static const int _maxTrailPoints = 120;
 
   // 不在移动时的淡出计时（秒）
   double fadeTimer = 0;
@@ -130,9 +130,9 @@ class MemberTrail {
     }
   }
 
-  /// 清除过期的轨迹点（超过3分钟的）
+  /// 清除过期的轨迹点（超过5分钟的，拖尾更长需要更长的保留时间）
   void cleanOldPoints() {
-    final cutoff = DateTime.now().subtract(const Duration(minutes: 3));
+    final cutoff = DateTime.now().subtract(const Duration(minutes: 5));
     while (_trailPoints.isNotEmpty && _trailPoints.first.timestamp.isBefore(cutoff)) {
       _trailPoints.removeAt(0);
     }
@@ -195,12 +195,14 @@ class _TrailParticleLayerState extends State<TrailParticleLayer>
     return TrailAnimatedBuilder(
       listenable: _controller,
       builder: (context, _) {
-        return CustomPaint(
-          painter: _TrailPainter(
-            memberTrails: widget.memberTrails,
-            mapController: widget.mapController,
+        return IgnorePointer(
+          child: CustomPaint(
+            painter: _TrailPainter(
+              memberTrails: widget.memberTrails,
+              mapController: widget.mapController,
+            ),
+            size: Size.infinite,
           ),
-          size: Size.infinite,
         );
       },
     );
@@ -253,16 +255,16 @@ class _TrailPainter extends CustomPainter {
     double baseWidth;
     switch (type) {
       case MovementType.driving:
-        baseWidth = 8.0;
+        baseWidth = 14.0;
         break;
       case MovementType.cycling:
-        baseWidth = 6.0;
+        baseWidth = 10.0;
         break;
       case MovementType.walking:
-        baseWidth = 4.0;
+        baseWidth = 7.0;
         break;
       case MovementType.still:
-        baseWidth = 3.0;
+        baseWidth = 5.0;
         break;
     }
 

@@ -1409,20 +1409,16 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
                   ),
                 ],
               ),
-            // 成员标记 - 同位置花瓣状排列
+            // 拖尾粒子层（在标记下面，让头像盖住拖尾起点）
+            TrailParticleLayer(
+              mapController: _mapController,
+              memberTrails: _memberTrails,
+            ),
+            // 成员标记 - 同位置花瓣状排列（盖在拖尾上面）
             MarkerLayer(
               markers: _buildClusteredMarkers(),
             ),
           ],
-        ),
-        // 拖尾粒子层
-        Positioned.fill(
-          child: IgnorePointer(
-            child: TrailParticleLayer(
-              mapController: _mapController,
-              memberTrails: _memberTrails,
-            ),
-          ),
         ),
         // 表情炸弹层
         if (_emojiParticles.isNotEmpty)
@@ -2177,7 +2173,7 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
       final charging = isMe ? _myCharging : ((member['is_charging'] ?? 0) == 1);
       return Marker(
         point: pos,
-        width: 100,
+        width: 110,
         height: 140,
         child: MemberMarker(
           name: trail.name,

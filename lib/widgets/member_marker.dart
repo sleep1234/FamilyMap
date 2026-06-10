@@ -315,7 +315,7 @@ class _MemberMarkerState extends State<MemberMarker>
         borderRadius: BorderRadius.circular(12),
         border: Border.all(color: Colors.white12, width: 0.5),
       ),
-      constraints: const BoxConstraints(maxWidth: 90),
+      constraints: const BoxConstraints(maxWidth: 100),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -403,13 +403,13 @@ class _MemberMarkerState extends State<MemberMarker>
 
   String? _formatStayTime(int? minutes) {
     if (minutes == null || minutes <= 0) return null;
-    if (minutes < 60) return '$minutes分钟';
+    if (minutes < 60) return '${minutes}m';      // 如 "33m"
     final hours = minutes ~/ 60;
     final mins = minutes % 60;
-    if (hours < 24) return mins > 0 ? '${hours}h${mins}m' : '${hours}小时';
+    if (hours < 24) return mins > 0 ? '${hours}h${mins}m' : '${hours}h';  // 如 "8h33m" "4h"
     final days = hours ~/ 24;
     final remainHours = hours % 24;
-    return remainHours > 0 ? '${days}d${remainHours}h' : '${days}天';
+    return remainHours > 0 ? '${days}d${remainHours}h' : '${days}d';      // 如 "2d3h" "1d"
   }
 
   Color _speedTagColor() {
