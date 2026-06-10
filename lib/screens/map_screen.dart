@@ -2177,8 +2177,8 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
       final charging = isMe ? _myCharging : ((member['is_charging'] ?? 0) == 1);
       return Marker(
         point: pos,
-        width: 80,
-        height: 130,
+        width: 100,
+        height: 140,
         child: MemberMarker(
           name: trail.name,
           color: trail.color,

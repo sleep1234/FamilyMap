@@ -338,7 +338,8 @@ function updateStay(userId, lat, lng, address, speed) {
       }
 
       // 离开了，结束当前停留
-      const started = new Date(active.started_at);
+      // 注意：SQLite datetime("now") 存的是 UTC，必须加 'Z' 后缀让 JS 按UTC解析，否则会多出时区偏移
+      const started = new Date(active.started_at + 'Z');
       const ended = new Date();
       const dur = Math.round((ended - started) / 60000);
       // 推断停留类型
@@ -387,7 +388,7 @@ function updateStay(userId, lat, lng, address, speed) {
 
   if (recent) {
     const dist = getDistance(lat, lng, recent.latitude, recent.longitude);
-    const endedAt = new Date(recent.ended_at);
+    const endedAt = new Date(recent.ended_at + 'Z');
     const elapsedMinutes = (Date.now() - endedAt.getTime()) / 60000;
     // 时间衰减：30分钟内200m续接，30分钟-2小时内要求100m内
     const maxDist = elapsedMinutes < 30 ? 200 : 100;
@@ -423,7 +424,7 @@ setInterval(() => {
   try {
     const stale = queryAll('SELECT * FROM stays WHERE ended_at IS NULL AND started_at < datetime("now", "-24 hours")');
     stale.forEach(s => {
-      const dur = Math.round((Date.now() - new Date(s.started_at).getTime()) / 60000);
+      const dur = Math.round((Date.now() - new Date(s.started_at + 'Z').getTime()) / 60000);
       run('UPDATE stays SET ended_at = datetime("now"), duration_minutes = ? WHERE id = ?', [dur, s.id]);
     });
   } catch (_) {}
@@ -435,7 +436,7 @@ function checkAlive() {
   users.forEach(u => {
     const lastLoc = queryOne('SELECT recorded_at FROM locations WHERE user_id = ? ORDER BY recorded_at DESC LIMIT 1', [u.id]);
     if (!lastLoc) return;
-    const lastTime = new Date(lastLoc.recorded_at);
+    const lastTime = new Date(lastLoc.recorded_at + 'Z');
     const hoursSince = (Date.now() - lastTime.getTime()) / 3600000;
 
     if (hoursSince >= 24) {
@@ -608,7 +609,7 @@ app.get('/api/circles/:circleId/members', (req, res) => {
     }
     const stay = queryOne('SELECT * FROM stays WHERE user_id = ? AND ended_at IS NULL ORDER BY started_at DESC LIMIT 1', [m.id]);
     if (stay) {
-      const mins = Math.round((Date.now() - new Date(stay.started_at).getTime()) / 60000);
+      const mins = Math.round((Date.now() - new Date(stay.started_at + 'Z').getTime()) / 60000);
       m.stay_address = stay.address;
       m.stay_minutes = mins;
       m.stay_started_at = stay.started_at;
@@ -938,7 +939,7 @@ app.get('/api/users/:userId/export/gpx', (req, res) => {
   );
   const user = queryOne('SELECT name FROM users WHERE id = ?', [req.params.userId]);
   const trkpts = points.map(p =>
-    `    <trkpt lat="${p.latitude}" lon="${p.longitude}"><ele>0</ele><time>${new Date(p.recorded_at).toISOString()}</time><speed>${p.speed || 0}</speed></trkpt>`
+    `    <trkpt lat="${p.latitude}" lon="${p.longitude}"><ele>0</ele><time>${new Date(p.recorded_at + 'Z').toISOString()}</time><speed>${p.speed || 0}</speed></trkpt>`
   ).join('\n');
   const gpx = `<?xml version="1.0" encoding="UTF-8"?>
 <gpx version="1.1" creator="FamilyMap">
@@ -1258,8 +1259,8 @@ io.on('connection', (socket) => {
     const currentStay = queryOne('SELECT * FROM stays WHERE user_id = ? AND ended_at IS NULL ORDER BY started_at DESC LIMIT 1', [userId]);
     if (currentStay && !(speed > 1.0)) {
       payload.stay_address = currentStay.address;
-      payload.stay_minutes = Math.round((Date.now() - new Date(currentStay.started_at).getTime()) / 60000);
-      payload.stay_started_at = new Date(currentStay.started_at).toISOString();
+      payload.stay_minutes = Math.round((Date.now() - new Date(currentStay.started_at + 'Z').getTime()) / 60000);
+      payload.stay_started_at = new Date(currentStay.started_at + 'Z').toISOString();
     }
 
     // 幽灵模式：只发送给允许看到的圈子

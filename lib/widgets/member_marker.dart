@@ -309,22 +309,31 @@ class _MemberMarkerState extends State<MemberMarker>
 
     return Container(
       margin: const EdgeInsets.only(top: 3),
-      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
       decoration: BoxDecoration(
-        color: Colors.black87,
-        borderRadius: BorderRadius.circular(10),
+        color: Colors.black.withOpacity(0.85),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.white12, width: 0.5),
       ),
+      constraints: const BoxConstraints(maxWidth: 90),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
           // 停留时间
           if (stayText != null)
-            Text(stayText, style: const TextStyle(color: Colors.white70, fontSize: 9, fontWeight: FontWeight.w500)),
+            Flexible(
+              child: Text(
+                stayText,
+                style: const TextStyle(color: Colors.white70, fontSize: 10, fontWeight: FontWeight.w600),
+                overflow: TextOverflow.ellipsis,
+                maxLines: 1,
+              ),
+            ),
           // 分隔竖线（两者都有时才显示）
           if (hasBoth) ...[
-            const SizedBox(width: 4),
-            Container(width: 1, height: 10, color: Colors.white24),
-            const SizedBox(width: 4),
+            const SizedBox(width: 3),
+            Container(width: 1, height: 12, color: Colors.white24),
+            const SizedBox(width: 3),
           ],
           // 电池图标 + 百分比
           if (batteryLevel != null) _buildBatteryIndicator(batteryLevel, isCharging),
@@ -362,21 +371,15 @@ class _MemberMarkerState extends State<MemberMarker>
       batteryColor = const Color(0xFFFF6B6B);
     }
 
+    // 充电时用闪电图标，否则用电池图标
+    final icon = charging ? Icons.bolt : Icons.battery_std;
+
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        // 电池外壳
-        CustomPaint(
-          size: const Size(16, 10),
-          painter: _BatteryPainter(
-            level: level / 100.0,
-            color: batteryColor,
-            showBolt: charging,
-            boltOpacity: charging ? 0.5 + 0.5 * _chargeCtrl.value : 0,
-          ),
-        ),
-        const SizedBox(width: 2),
-        Text('$level%', style: TextStyle(color: batteryColor, fontSize: 9, fontWeight: FontWeight.w600)),
+        Icon(icon, size: 14, color: charging ? const Color(0xFF34C759) : batteryColor),
+        const SizedBox(width: 1),
+        Text('$level%', style: TextStyle(color: batteryColor, fontSize: 10, fontWeight: FontWeight.w700)),
       ],
     );
   }
@@ -443,66 +446,4 @@ class _PulseRingPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _PulseRingPainter old) => old.progress != progress;
-}
-
-// ==================== 电池图标画笔 ====================
-class _BatteryPainter extends CustomPainter {
-  final double level; // 0.0 ~ 1.0
-  final Color color;
-  final bool showBolt;
-  final double boltOpacity;
-  _BatteryPainter({
-    required this.level,
-    required this.color,
-    required this.showBolt,
-    required this.boltOpacity,
-  });
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final paint = Paint()..style = PaintingStyle.stroke..strokeWidth = 1.2..color = Colors.white70;
-    final fillPaint = Paint()..style = PaintingStyle.fill..color = color;
-
-    // 外壳 (圆角矩形)
-    final bodyRect = RRect.fromRectAndRadius(
-      Rect.fromLTWH(0, 1, size.width - 3, size.height - 2),
-      const Radius.circular(2),
-    );
-    canvas.drawRRect(bodyRect, paint);
-
-    // 右侧小正极凸起
-    canvas.drawRect(Rect.fromLTWH(size.width - 2.5, 3, 2, size.height - 6), paint);
-
-    // 内部填充
-    final fillWidth = (size.width - 5) * level.clamp(0.0, 1.0);
-    if (fillWidth > 0) {
-      final fillRect = RRect.fromRectAndRadius(
-        Rect.fromLTWH(1, 2, fillWidth, size.height - 4),
-        const Radius.circular(1),
-      );
-      canvas.drawRRect(fillRect, fillPaint);
-    }
-
-    // 充电闪电
-    if (showBolt) {
-      final boltPaint = Paint()
-        ..color = Colors.white.withOpacity(boltOpacity)
-        ..style = PaintingStyle.fill;
-      final cx = size.width / 2 - 1;
-      final cy = size.height / 2;
-      final path = Path()
-        ..moveTo(cx - 1, cy - 3)
-        ..lineTo(cx + 1.5, cy - 0.5)
-        ..lineTo(cx, cy - 0.5)
-        ..lineTo(cx + 1, cy + 3)
-        ..lineTo(cx - 1.5, cy + 0.5)
-        ..lineTo(cx, cy + 0.5)
-        ..close();
-      canvas.drawPath(path, boltPaint);
-    }
-  }
-
-  @override
-  bool shouldRepaint(covariant _BatteryPainter old) =>
-      old.level != level || old.boltOpacity != boltOpacity;
 }
