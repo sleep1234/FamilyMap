@@ -264,7 +264,7 @@ class _TimelineScreenState extends State<TimelineScreen> {
                         child: Text(
                           stay.address?.isNotEmpty == true ? stay.address! : '未知地点',
                           style: TextStyle(fontSize: 14, fontWeight: isActive ? FontWeight.w600 : FontWeight.w500),
-                          maxLines: 1, overflow: TextOverflow.ellipsis,
+                          maxLines: 2, overflow: TextOverflow.ellipsis,
                         ),
                       ),
                     ],

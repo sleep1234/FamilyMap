@@ -9,6 +9,9 @@ class ApiService {
 
   ApiService({this.baseUrl = 'http://www.zhp0104.fun:8090'});
 
+  /// 请求超时时间
+  static const Duration _timeout = Duration(seconds: 10);
+
   // ==================== 用户 ====================
 
   /// 注册新用户（用户名+密码+昵称）
@@ -19,8 +22,18 @@ class ApiService {
 
   /// 登录（用户名+密码）
   Future<AppUser> loginUser(String username, String password) async {
-    final res = await _post('/api/login', {'username': username, 'password': password});
+    final res = await _post('/api/login', {
+      'username': username,
+      'password': password,
+      'device_info': 'Android', // 设备标识
+    });
     return AppUser.fromJson(res);
+  }
+
+  /// 登出（删除服务端会话）
+  Future<void> logout(String? token) async {
+    if (token == null) return;
+    await _post('/api/logout', {'token': token});
   }
 
   /// 旧版注册（兼容：仅昵称）
@@ -284,15 +297,17 @@ class ApiService {
     return _get('/api/users/$userId/driving-score?days=$days');
   }
 
-  // ==================== 基础 HTTP 方法 ====================
+  // ==================== 基础 HTTP 方法（含超时 + 状态码检查） ====================
 
   Future<Map<String, dynamic>> _get(String path) async {
-    final res = await http.get(Uri.parse('$baseUrl$path'));
+    final res = await http.get(Uri.parse('$baseUrl$path')).timeout(_timeout);
+    _checkStatus(res);
     return jsonDecode(res.body) as Map<String, dynamic>;
   }
 
   Future<List<dynamic>> _getList(String path) async {
-    final res = await http.get(Uri.parse('$baseUrl$path'));
+    final res = await http.get(Uri.parse('$baseUrl$path')).timeout(_timeout);
+    _checkStatus(res);
     return jsonDecode(res.body) as List;
   }
 
@@ -301,7 +316,8 @@ class ApiService {
       Uri.parse('$baseUrl$path'),
       headers: {'Content-Type': 'application/json'},
       body: jsonEncode(body),
-    );
+    ).timeout(_timeout);
+    _checkStatus(res);
     return jsonDecode(res.body) as Map<String, dynamic>;
   }
 
@@ -310,11 +326,29 @@ class ApiService {
       Uri.parse('$baseUrl$path'),
       headers: {'Content-Type': 'application/json'},
       body: jsonEncode(body),
-    );
+    ).timeout(_timeout);
+    _checkStatus(res);
     return jsonDecode(res.body) as Map<String, dynamic>;
   }
 
   Future<void> _delete(String path) async {
-    await http.delete(Uri.parse('$baseUrl$path'));
+    final res = await http.delete(Uri.parse('$baseUrl$path')).timeout(_timeout);
+    _checkStatus(res);
   }
+
+  /// 检查 HTTP 状态码，非 2xx 抛出异常
+  void _checkStatus(http.Response res) {
+    if (res.statusCode < 200 || res.statusCode >= 300) {
+      throw ApiException(res.statusCode, res.body);
+    }
+  }
+}
+
+/// API 异常：包含 HTTP 状态码和响应体
+class ApiException implements Exception {
+  final int statusCode;
+  final String body;
+  ApiException(this.statusCode, this.body);
+  @override
+  String toString() => 'ApiException($statusCode): $body';
 }

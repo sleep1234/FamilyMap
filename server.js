@@ -14,6 +14,20 @@ const PORT = process.env.PORT || 3000;
 const DB_PATH = path.join(__dirname, 'familymap.db');
 const AMAP_KEY = process.env.AMAP_KEY || ''; // 高德API Key，环境变量配置
 
+// ==================== 工具函数 ====================
+
+/// HTML 转义，防止 XSS 注入
+function escapeHtml(str) {
+  if (!str) return '';
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+/// XML 转义，防止 XML 注入
+function escapeXml(str) {
+  if (!str) return '';
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&apos;');
+}
+
 // ==================== 数据库 ====================
 let db;
 let saveTimeout;
@@ -49,6 +63,12 @@ async function initDB() {
     name TEXT NOT NULL, latitude REAL NOT NULL, longitude REAL NOT NULL,
     radius INTEGER DEFAULT 200, created_by TEXT NOT NULL,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP)`);
+  // 用户-围栏状态持久化（记录上次已知是在围栏内还是外，跨重启/断线不丢失）
+  db.run(`CREATE TABLE IF NOT EXISTS user_fence_states (
+    user_id TEXT NOT NULL, fence_id INTEGER NOT NULL,
+    is_inside INTEGER DEFAULT 0,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (user_id, fence_id))`);
   db.run(`CREATE TABLE IF NOT EXISTS stays (
     id INTEGER PRIMARY KEY AUTOINCREMENT, user_id TEXT NOT NULL,
     latitude REAL NOT NULL, longitude REAL NOT NULL, address TEXT,
@@ -88,6 +108,14 @@ async function initDB() {
     name TEXT NOT NULL, phone TEXT NOT NULL, relation TEXT DEFAULT 'family',
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP)`);
 
+  // 会话表：支持多设备登录互踢机制
+  db.run(`CREATE TABLE IF NOT EXISTS sessions (
+    token TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    device_info TEXT DEFAULT '',
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    last_active DATETIME DEFAULT CURRENT_TIMESTAMP)`);
+
   // 索引（覆盖5.2建议：关键查询路径全部加索引）
   db.run('CREATE INDEX IF NOT EXISTS idx_loc_user_time ON locations(user_id, recorded_at DESC)');
   db.run('CREATE INDEX IF NOT EXISTS idx_loc_time ON locations(recorded_at DESC)');
@@ -98,6 +126,8 @@ async function initDB() {
   db.run('CREATE INDEX IF NOT EXISTS idx_fence_circle ON geofences(circle_id)');
   db.run('CREATE INDEX IF NOT EXISTS idx_circle_member_user ON circle_members(user_id)');
   db.run('CREATE INDEX IF NOT EXISTS idx_sos_status ON sos_alerts(status)');
+  db.run('CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id)');
+  db.run('CREATE INDEX IF NOT EXISTS idx_sessions_token ON sessions(token)');
 
   // 迁移：为旧表添加 username / password_hash 列（如不存在）
   try {
@@ -146,6 +176,55 @@ function hashPassword(password) {
 function verifyPassword(password, hash) {
   return hashPassword(password) === hash;
 }
+
+// ==================== 会话管理（多设备登录互踢） ====================
+
+/// 生成会话 token（32字节随机hex字符串）
+function generateSessionToken() {
+  return crypto.randomBytes(32).toString('hex');
+}
+
+/// 创建新会话，并踢掉同用户的其他旧会话
+/// 返回新 token
+function createSession(userId, deviceInfo = '') {
+  const token = generateSessionToken();
+  // 删除该用户的所有旧会话（单点登录：新登录踢掉旧设备）
+  const oldSessions = queryAll('SELECT token FROM sessions WHERE user_id = ?', [userId]);
+  run('DELETE FROM sessions WHERE user_id = ?', [userId]);
+  // 创建新会话
+  run('INSERT INTO sessions (token, user_id, device_info) VALUES (?, ?, ?)', [token, userId, deviceInfo]);
+  // 向旧会话对应的 Socket 连接发送 force_logout 事件
+  if (oldSessions.length > 0) {
+    const oldTokens = new Set(oldSessions.map(s => s.token));
+    for (const [socketId, info] of onlineUsers.entries()) {
+      if (info.userId === userId && oldTokens.has(info.token)) {
+        console.log(`[互踢] 用户 ${userId} 在新设备登录，踢掉旧 socket ${socketId}`);
+        io.to(socketId).emit('force_logout', { reason: '账号已在其他设备登录' });
+      }
+    }
+  }
+  return token;
+}
+
+/// 验证会话 token 是否有效，返回 userId 或 null
+function verifySession(token) {
+  if (!token) return null;
+  const session = queryOne('SELECT user_id FROM sessions WHERE token = ?', [token]);
+  if (!session) return null;
+  // 更新最后活跃时间
+  run("UPDATE sessions SET last_active = datetime('now') WHERE token = ?", [token]);
+  return session.user_id;
+}
+
+/// 清理超过7天未活跃的过期会话
+function cleanExpiredSessions() {
+  run("DELETE FROM sessions WHERE last_active < datetime('now', '-7 days')");
+}
+
+// 每小时清理一次过期会话
+setInterval(cleanExpiredSessions, 3600000);
+// 注意：cleanExpiredSessions() 不在此处调用，因为 db 对象尚未初始化
+// 改在 initDB() 完成后调用
 
 // ==================== 逆地理解码 ====================
 const https = require('https');
@@ -484,15 +563,17 @@ app.post('/api/register', (req, res) => {
     run('INSERT INTO users (id, name, avatar_color, username, password_hash) VALUES (?, ?, ?, ?, ?)',
       [id, name, avatar_color, username, password_hash]);
     run('INSERT INTO user_settings (user_id) VALUES (?)', [id]);
-    res.json({ id, name, avatar_color, username });
+    // 注册同时也创建会话
+    const token = createSession(id, 'register');
+    res.json({ id, name, avatar_color, username, token });
   } catch (e) {
     res.status(500).json({ error: '注册失败: ' + e.message });
   }
 });
 
-// 登录：用户名 + 密码
+// 登录：用户名 + 密码，返回 session token
 app.post('/api/login', (req, res) => {
-  const { username, password } = req.body;
+  const { username, password, device_info } = req.body;
   if (!username || !password) return res.status(400).json({ error: '用户名和密码不能为空' });
 
   const user = queryOne('SELECT * FROM users WHERE username = ?', [username]);
@@ -502,6 +583,9 @@ app.post('/api/login', (req, res) => {
     return res.status(401).json({ error: '用户名或密码错误' });
   }
 
+  // 创建新会话并踢掉同用户的其他旧设备
+  const token = createSession(user.id, device_info || '');
+
   res.json({
     id: user.id,
     name: user.name,
@@ -510,6 +594,7 @@ app.post('/api/login', (req, res) => {
     mood: user.mood,
     is_sleeping: user.is_sleeping,
     ghost_mode: user.ghost_mode,
+    token,  // 会话 token，客户端需保存
   });
 });
 
@@ -530,13 +615,25 @@ app.post('/api/users', (req, res) => {
     run('INSERT INTO users (id, name, avatar_color, username) VALUES (?, ?, ?, ?)', [id, name, avatar_color, alt]);
   }
   run('INSERT INTO user_settings (user_id) VALUES (?)', [id]);
-  res.json({ id, name, avatar_color });
+  const token = createSession(id, 'legacy');
+  res.json({ id, name, avatar_color, token });
 });
 
 app.get('/api/users/:userId', (req, res) => {
   const user = queryOne('SELECT * FROM users WHERE id = ?', [req.params.userId]);
   if (!user) return res.status(404).json({ error: '用户不存在' });
+  // 删除敏感字段：密码哈希不应暴露给前端
+  delete user.password_hash;
   res.json(user);
+});
+
+// 登出：删除当前会话 token
+app.post('/api/logout', (req, res) => {
+  const { token } = req.body;
+  if (token) {
+    run('DELETE FROM sessions WHERE token = ?', [token]);
+  }
+  res.json({ success: true });
 });
 
 app.put('/api/users/:userId', (req, res) => {
@@ -771,7 +868,8 @@ app.put('/api/users/:userId/settings', (req, res) => {
 app.get('/api/users/:userId/world', (req, res) => {
   // 用3位精度匹配缓存（与reverseGeocode一致）
   const locations = queryAll('SELECT DISTINCT ROUND(latitude, 3) as lat_key, ROUND(longitude, 3) as lng_key FROM locations WHERE user_id = ?', [req.params.userId]);
-  const total = queryOne('SELECT COUNT(DISTINCT ROUND(latitude, 1).toString() || "," || ROUND(longitude, 1).toString()) as grid_count FROM locations WHERE user_id = ?', [req.params.userId]);
+  // 用1位精度计算网格数（约11km网格）
+  const gridRows = queryAll('SELECT DISTINCT CAST(ROUND(latitude, 1) * 10 AS INTEGER) as lat_grid, CAST(ROUND(longitude, 1) * 10 AS INTEGER) as lng_grid FROM locations WHERE user_id = ?', [req.params.userId]);
   const cities = new Set();
   locations.forEach(l => {
     // 用3位精度查缓存，与存储精度一致
@@ -781,7 +879,7 @@ app.get('/api/users/:userId/world', (req, res) => {
       if (match) cities.add(match[1]);
     }
   });
-  res.json({ gridCount: locations.length, cities: [...cities], cityCount: cities.size });
+  res.json({ gridCount: gridRows.length, cities: [...cities], cityCount: cities.size });
 });
 
 // --- 联系人/好友 ---
@@ -848,7 +946,7 @@ app.get('/share/:token', (req, res) => {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>${user?.name || '家人'}的位置 - FamilyMap</title>
+<title>${escapeHtml(user?.name) || '家人'}的位置 - FamilyMap</title>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#0f172a;color:#e2e8f0;height:100vh;display:flex;flex-direction:column}
@@ -864,8 +962,8 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
 </head>
 <body>
 <div class="header">
-  <div class="avatar" style="background:${user?.avatar_color || '#3b82f6'}">${(user?.name || '?')[0]}</div>
-  <div><div class="name">${user?.name || '未知'}${data.trackMode ? '<span class="mode-tag">行程追踪中</span>' : ''}</div><div class="status">位置分享</div></div>
+  <div class="avatar" style="background:${user?.avatar_color || '#3b82f6'}">${escapeHtml((user?.name || '?')[0])}</div>
+  <div><div class="name">${escapeHtml(user?.name) || '未知'}${data.trackMode ? '<span class="mode-tag">行程追踪中</span>' : ''}</div><div class="status">位置分享</div></div>
 </div>
 <div id="map"></div>
 <div class="info-bar" id="info">加载地图中...</div>
@@ -875,7 +973,7 @@ var lat0=${gcjCoords.lat},lng0=${gcjCoords.lng},token="${req.params.token}",trac
 function loadScript(src,cb){var s=document.createElement('script');s.src=src;s.onload=cb;document.head.appendChild(s)}
 function initMap(){
   var map=new AMap.Map('map',{center:[lng0,lat0],zoom:16,mapStyle:'amap://styles/dark',resizeEnable:true});
-  var marker=new AMap.Marker({position:[lng0,lat0],title:'${user?.name || '家人'}'});
+  var marker=new AMap.Marker({position:[lng0,lat0],title:'${escapeHtml(user?.name) || '家人'}'});
   map.add(marker);
   document.getElementById('info').textContent='最后更新: '+new Date().toLocaleTimeString('zh-CN');
   if(trackMode){setInterval(function(){
@@ -943,7 +1041,7 @@ app.get('/api/users/:userId/export/gpx', (req, res) => {
   ).join('\n');
   const gpx = `<?xml version="1.0" encoding="UTF-8"?>
 <gpx version="1.1" creator="FamilyMap">
-  <trk><name>${user?.name || 'Unknown'} - ${date}</name>
+  <trk><name>${escapeXml(user?.name) || 'Unknown'} - ${date}</name>
   <trkseg>
 ${trkpts}
   </trkseg></trk>
@@ -1192,10 +1290,20 @@ io.on('connection', (socket) => {
   console.log('用户连接:', socket.id);
 
   socket.on('user:online', (data) => {
-    const { userId } = data;
+    const { userId, token } = data;
+    // 验证会话 token（如果提供了 token）
+    if (token) {
+      const tokenUserId = verifySession(token);
+      if (!tokenUserId || tokenUserId !== userId) {
+        // token 无效或不属于该用户，踢掉
+        socket.emit('force_logout', { reason: '会话已过期，请重新登录' });
+        socket.disconnect(true);
+        return;
+      }
+    }
     const circles = queryAll('SELECT circle_id FROM circle_members WHERE user_id = ?', [userId]);
     const circleIds = circles.map(c => c.circle_id);
-    onlineUsers.set(socket.id, { userId, circleIds });
+    onlineUsers.set(socket.id, { userId, circleIds, token: token || null });
     circleIds.forEach(cid => socket.join(cid));
     circleIds.forEach(cid => socket.to(cid).emit('member:online', { userId, timestamp: Date.now() }));
   });
@@ -1277,24 +1385,41 @@ io.on('connection', (socket) => {
     });
 
     // 地理围栏检测
+    // 策略：首次上线从 DB 读取上次状态到内存（1次查询），之后纯内存比对
+    //       只有进入/离开时才写 1 次 DB，日常零 DB 开销
     if (!settings?.blur_location) { // 模糊模式下不触发围栏
+      if (!socket.data) socket.data = {};
+
+      // 首次位置上报：从 DB 加载上次状态到内存，然后 return（不触发通知）
+      if (!socket.data._fenceLoaded) {
+        socket.data._fenceLoaded = true;
+        socket.data.insideFences = new Set();
+        const states = queryAll('SELECT fence_id, is_inside FROM user_fence_states WHERE user_id = ?', [userId]);
+        states.forEach(s => { if (s.is_inside === 1) socket.data.insideFences.add(s.fence_id); });
+        return;
+      }
+
+      // 后续上报：纯内存比对
       info.circleIds.forEach(cid => {
         const fences = queryAll('SELECT * FROM geofences WHERE circle_id = ?', [cid]);
         fences.forEach(fence => {
           const dist = getDistance(latitude, longitude, fence.latitude, fence.longitude);
-          const wasInside = socket?.data?.insideFences?.has(fence.id);
-          if (!socket.data) socket.data = {};
-          if (!socket.data.insideFences) socket.data.insideFences = new Set();
+          const isNowInside = dist <= fence.radius;
+          const wasInside = socket.data.insideFences.has(fence.id);
 
-          if (dist <= fence.radius && !wasInside) {
+          if (isNowInside && !wasInside) {
             socket.data.insideFences.add(fence.id);
+            run('INSERT OR REPLACE INTO user_fence_states (user_id, fence_id, is_inside, updated_at) VALUES (?, ?, 1, datetime("now"))',
+              [userId, fence.id]);
             io.to(cid).emit('geofence:alert', {
               fenceName: fence.name, userId,
               userName: queryOne('SELECT name FROM users WHERE id = ?', [userId])?.name || '未知',
               action: 'entered', distance: Math.round(dist), timestamp: Date.now()
             });
-          } else if (dist > fence.radius && wasInside) {
+          } else if (!isNowInside && wasInside) {
             socket.data.insideFences.delete(fence.id);
+            run('INSERT OR REPLACE INTO user_fence_states (user_id, fence_id, is_inside, updated_at) VALUES (?, ?, 0, datetime("now"))',
+              [userId, fence.id]);
             io.to(cid).emit('geofence:alert', {
               fenceName: fence.name, userId,
               userName: queryOne('SELECT name FROM users WHERE id = ?', [userId])?.name || '未知',
@@ -1491,6 +1616,7 @@ function getDistance(lat1, lon1, lat2, lon2) {
 
 // ==================== 启动 ====================
 initDB().then(() => {
+  cleanExpiredSessions(); // 数据库就绪后清理过期会话
   server.listen(PORT, () => {
     console.log(`\n  FamilyMap 位置共享服务已启动`);
     console.log(`  本地访问: http://localhost:${PORT}`);

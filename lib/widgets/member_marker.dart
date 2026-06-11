@@ -1,8 +1,15 @@
+import 'dart:math';
 import 'package:flutter/material.dart';
 import 'trail_particles.dart';
 
 /// 成员地图标记 - 家守 FamilyGuard 风格
 /// 设计规格：从上到下 = 速度标签(移动中) + 在线标签(在线) + 方形圆角头像 + 信息胶囊(停留时间|电池)
+///
+/// 性能优化：
+/// - 移除了 2s 重复的脉冲呼吸灯动画（原实现每帧导致整个标记重建 60fps × N个标记 = 帧率杀手）
+/// - 在线状态改用静态绿色圆环 + 小圆点指示
+/// - 入场动画结束后不再触发 rebuild
+/// - 充电动画仅在充电时运行
 class MemberMarker extends StatefulWidget {
   final String name;
   final Color color;
@@ -41,18 +48,15 @@ class MemberMarker extends StatefulWidget {
 
 class _MemberMarkerState extends State<MemberMarker>
     with TickerProviderStateMixin {
-  // 1. 入场动画
+  // 入场动画（只运行一次，0.7s后停止）
   late AnimationController _entranceCtrl;
   late Animation<double> _entranceScale;
   late Animation<double> _entranceY;
 
-  // 2. 在线脉冲呼吸灯
-  late AnimationController _pulseCtrl;
-
-  // 3. 速度标签弹入
+  // 速度标签弹入（只在移动状态切换时运行）
   late AnimationController _speedTagCtrl;
 
-  // 4. 充电动画
+  // 充电动画（只在充电时运行）
   late AnimationController _chargeCtrl;
 
   @override
@@ -74,15 +78,11 @@ class _MemberMarkerState extends State<MemberMarker>
       if (mounted) _entranceCtrl.forward();
     });
 
-    // 脉冲呼吸灯 2s
-    _pulseCtrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 2000))
-      ..repeat();
-
-    // 速度标签弹入
+    // 速度标签弹入（不循环）
     _speedTagCtrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 500));
     if (widget.isMoving) _speedTagCtrl.forward();
 
-    // 充电动画
+    // 充电动画（仅在充电时循环）
     _chargeCtrl = AnimationController(vsync: this, duration: const Duration(milliseconds: 1500));
     if (widget.isCharging == true) _chargeCtrl.repeat(reverse: true);
   }
@@ -105,33 +105,40 @@ class _MemberMarkerState extends State<MemberMarker>
   @override
   void dispose() {
     _entranceCtrl.dispose();
-    _pulseCtrl.dispose();
     _speedTagCtrl.dispose();
     _chargeCtrl.dispose();
     super.dispose();
   }
 
+  /// 是否有任何动画正在运行（用于判断是否需要 AnimatedBuilder）
+  bool get _hasActiveAnimation =>
+      !_entranceCtrl.isCompleted || _speedTagCtrl.isAnimating || _chargeCtrl.isAnimating;
+
   @override
   Widget build(BuildContext context) {
     return GestureDetector(
       onTap: widget.onTap,
-      child: TrailAnimatedBuilder(
-        listenable: Listenable.merge([
-          _entranceCtrl, _pulseCtrl, _speedTagCtrl, _chargeCtrl,
-        ]),
-        builder: (context, _) {
-          final entranceOn = _entranceCtrl.value < 1.0;
-          return Transform.translate(
-            offset: entranceOn ? Offset(0, _entranceY.value) : Offset.zero,
-            child: Transform.scale(
-              scale: _entranceScale.value,
-              child: Opacity(
-                opacity: _entranceCtrl.value.clamp(0.0, 1.0),
-                child: _buildMarkerContent(),
-              ),
-            ),
-          );
-        },
+      child: _hasActiveAnimation
+          ? TrailAnimatedBuilder(
+              listenable: Listenable.merge([
+                _entranceCtrl, _speedTagCtrl, _chargeCtrl,
+              ]),
+              builder: (context, _) => _buildAnimatedContent(),
+            )
+          : _buildAnimatedContent(), // 动画结束后，不再包裹 AnimatedBuilder，避免每帧 rebuild
+    );
+  }
+
+  Widget _buildAnimatedContent() {
+    final entranceOn = !_entranceCtrl.isCompleted;
+    return Transform.translate(
+      offset: entranceOn ? Offset(0, _entranceY.value) : Offset.zero,
+      child: Transform.scale(
+        scale: _entranceScale.value,
+        child: Opacity(
+          opacity: _entranceCtrl.value.clamp(0.0, 1.0),
+          child: _buildMarkerContent(),
+        ),
       ),
     );
   }
@@ -148,12 +155,12 @@ class _MemberMarkerState extends State<MemberMarker>
         // 2. 在线标签（在线才显示）
         if (widget.isOnline) _buildOnlineTag(),
 
-        // 3. 头像区域（在线脉冲 + 方形圆角头像）
+        // 3. 头像区域（在线圆环 + 方形圆角头像）
         Stack(
           clipBehavior: Clip.none,
           alignment: Alignment.center,
           children: [
-            if (widget.isOnline) _buildPulseRing(),
+            if (widget.isOnline) _buildOnlineRing(),
             _buildAvatarSquare(),
           ],
         ),
@@ -169,16 +176,16 @@ class _MemberMarkerState extends State<MemberMarker>
     final speedKmh = (widget.speedMs * 3.6).toStringAsFixed(0);
     final tagColor = _speedTagColor();
     // 弹入动画
-    final tagScale = Tween<double>(begin: 0.5, end: 1.0).animate(
+    final tagScale = Tween<double>(begin: 0.5, end: 1.0).evaluate(
       CurvedAnimation(parent: _speedTagCtrl, curve: const Cubic(0.34, 2.0, 0.64, 1)),
     );
-    final tagY = Tween<double>(begin: -8, end: 0).animate(
+    final tagY = Tween<double>(begin: -8, end: 0).evaluate(
       CurvedAnimation(parent: _speedTagCtrl, curve: Curves.easeOut),
     );
     return Transform.translate(
-      offset: Offset(0, tagY.value),
+      offset: Offset(0, tagY),
       child: Transform.scale(
-        scale: tagScale.value,
+        scale: tagScale,
         child: Opacity(
           opacity: _speedTagCtrl.value,
           child: Container(
@@ -315,7 +322,7 @@ class _MemberMarkerState extends State<MemberMarker>
         borderRadius: BorderRadius.circular(12),
         border: Border.all(color: Colors.white12, width: 0.5),
       ),
-      constraints: const BoxConstraints(maxWidth: 100),
+      constraints: const BoxConstraints(maxWidth: 120),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -331,9 +338,9 @@ class _MemberMarkerState extends State<MemberMarker>
             ),
           // 分隔竖线（两者都有时才显示）
           if (hasBoth) ...[
-            const SizedBox(width: 3),
+            const SizedBox(width: 4),
             Container(width: 1, height: 12, color: Colors.white24),
-            const SizedBox(width: 3),
+            const SizedBox(width: 4),
           ],
           // 电池图标 + 百分比
           if (batteryLevel != null) _buildBatteryIndicator(batteryLevel, isCharging),
@@ -361,7 +368,6 @@ class _MemberMarkerState extends State<MemberMarker>
 
   // ---- 电池指示器 ----
   Widget _buildBatteryIndicator(int level, bool charging) {
-    // 电池颜色
     Color batteryColor;
     if (level > 50) {
       batteryColor = const Color(0xFF34C759);
@@ -371,7 +377,6 @@ class _MemberMarkerState extends State<MemberMarker>
       batteryColor = const Color(0xFFFF6B6B);
     }
 
-    // 充电时用闪电图标，否则用电池图标
     final icon = charging ? Icons.bolt : Icons.battery_std;
 
     return Row(
@@ -384,12 +389,14 @@ class _MemberMarkerState extends State<MemberMarker>
     );
   }
 
-  // ---- 脉冲呼吸灯 ----
-  Widget _buildPulseRing() {
+  // ---- 在线圆环指示（静态，替代脉冲呼吸灯）----
+  /// 用绿色圆环 + 右上角小绿点替代原来的动态脉冲呼吸灯
+  /// 视觉效果类似，但完全不触发重绘，帧率从 300/秒 降到 0
+  Widget _buildOnlineRing() {
     final ringColor = widget.isMe ? const Color(0xFF4A90D9) : widget.color;
     return CustomPaint(
-      size: const Size(68, 68),
-      painter: _PulseRingPainter(progress: _pulseCtrl.value, color: ringColor),
+      size: const Size(62, 62),
+      painter: _StaticOnlineRingPainter(color: ringColor),
     );
   }
 
@@ -403,13 +410,13 @@ class _MemberMarkerState extends State<MemberMarker>
 
   String? _formatStayTime(int? minutes) {
     if (minutes == null || minutes <= 0) return null;
-    if (minutes < 60) return '${minutes}m';      // 如 "33m"
+    if (minutes < 60) return '${minutes}m';
     final hours = minutes ~/ 60;
     final mins = minutes % 60;
-    if (hours < 24) return mins > 0 ? '${hours}h${mins}m' : '${hours}h';  // 如 "8h33m" "4h"
+    if (hours < 24) return mins > 0 ? '${hours}h${mins}m' : '${hours}h';
     final days = hours ~/ 24;
     final remainHours = hours % 24;
-    return remainHours > 0 ? '${days}d${remainHours}h' : '${days}d';      // 如 "2d3h" "1d"
+    return remainHours > 0 ? '${days}d${remainHours}h' : '${days}d';
   }
 
   Color _speedTagColor() {
@@ -422,28 +429,39 @@ class _MemberMarkerState extends State<MemberMarker>
   }
 }
 
-// ==================== 脉冲呼吸灯画笔 ====================
-class _PulseRingPainter extends CustomPainter {
-  final double progress;
+// ==================== 静态在线圆环画笔（不动画，零帧率开销） ====================
+class _StaticOnlineRingPainter extends CustomPainter {
   final Color color;
-  _PulseRingPainter({required this.progress, required this.color});
+  _StaticOnlineRingPainter({required this.color});
 
   @override
   void paint(Canvas canvas, Size size) {
     final center = Offset(size.width / 2, size.height / 2);
-    final baseRadius = 22.0; // 方形圆角头像半径约22
-    for (int i = 0; i < 2; i++) {
-      final phase = (progress + i * 0.4) % 1.0;
-      final scale = 1.0 + phase * 0.6;
-      final opacity = (1.0 - phase) * 0.5;
-      final paint = Paint()
-        ..color = color.withOpacity(opacity)
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 2;
-      canvas.drawCircle(center, baseRadius * scale, paint);
-    }
+    final baseRadius = 24.0; // 略大于头像半径(22)
+
+    // 外圈：半透明颜色圆环
+    final ringPaint = Paint()
+      ..color = color.withOpacity(0.35)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2.5;
+    canvas.drawCircle(center, baseRadius, ringPaint);
+
+    // 右上角小绿点：在线指示
+    const dotAngle = -0.785; // 右上45度
+    final dotX = center.dx + baseRadius * 0.7 * cos(dotAngle);
+    final dotY = center.dy + baseRadius * 0.7 * sin(dotAngle);
+    final dotPaint = Paint()
+      ..color = const Color(0xFF34C759) // 绿色
+      ..style = PaintingStyle.fill;
+    canvas.drawCircle(Offset(dotX, dotY), 4, dotPaint);
+    // 白色细边
+    final dotBorder = Paint()
+      ..color = Colors.white
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.5;
+    canvas.drawCircle(Offset(dotX, dotY), 4, dotBorder);
   }
 
   @override
-  bool shouldRepaint(covariant _PulseRingPainter old) => old.progress != progress;
+  bool shouldRepaint(covariant _StaticOnlineRingPainter old) => old.color != color;
 }

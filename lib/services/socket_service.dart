@@ -6,9 +6,22 @@ import '../models/models.dart';
 
 /// Socket 服务 - 与后端 WebSocket 实时通信
 /// 5.3 增强：指数退避重连 + 离线位置缓存补传 + 降级表现
+/// 应用级单例：MapScreen 和 ChatScreen 共享同一实例，由 main.dart 管理生命周期
 class SocketService {
+  static SocketService? _instance;
+
+  /// 获取单例实例
+  static SocketService get instance => _instance ??= SocketService._internal();
+
+  /// 内部构造函数
+  SocketService._internal();
+  bool _isDisposed = false; // 是否已释放
+
+  /// 兼容旧代码的工厂构造（返回单例）
+  factory SocketService({String serverUrl = 'http://www.zhp0104.fun:8090'}) => instance;
+
   IO.Socket? _socket;
-  final String serverUrl;
+  final String serverUrl = 'http://www.zhp0104.fun:8090';
 
   // 所有实时事件流
   final _locationController = StreamController<MemberLocation>.broadcast();
@@ -25,8 +38,7 @@ class SocketService {
   final _memberJoinedController = StreamController<Map<String, dynamic>>.broadcast();
   final _lowBatteryController = StreamController<Map<String, dynamic>>.broadcast();
   final _homeStatusController = StreamController<Map<String, dynamic>>.broadcast();
-
-  SocketService({this.serverUrl = 'http://www.zhp0104.fun:8090'});
+  final _forceLogoutController = StreamController<Map<String, dynamic>>.broadcast();
 
   // 对外暴露的 Stream
   Stream<MemberLocation> get onMemberLocation => _locationController.stream;
@@ -43,20 +55,24 @@ class SocketService {
   Stream<Map<String, dynamic>> get onMemberJoined => _memberJoinedController.stream;
   Stream<Map<String, dynamic>> get onLowBattery => _lowBatteryController.stream;
   Stream<Map<String, dynamic>> get onHomeStatus => _homeStatusController.stream;
+  Stream<Map<String, dynamic>> get onForceLogout => _forceLogoutController.stream;
 
   /// 是否已连接
   bool get isConnected => _socket?.connected == true;
 
   String? _userId;
+  String? _sessionToken; // 会话 token
   bool _isReconnecting = false;
 
   // 离线位置缓存：网络断开时暂存位置，恢复后批量发送
   final List<Map<String, dynamic>> _offlineBuffer = [];
   static const int _maxOfflineBuffer = 50;
 
-  /// 连接到服务器（5.3 指数退避重连）
-  void connect(String userId) {
+  /// 连接到服务器（5.3 指数退避重连），同时传 session token
+  void connect(String userId, {String? token}) {
+    if (_isDisposed) return; // 已释放则不再连接
     _userId = userId;
+    _sessionToken = token;
     _socket = IO.io(serverUrl, <String, dynamic>{
       'transports': ['websocket'],
       'autoConnect': true,
@@ -71,7 +87,11 @@ class SocketService {
     _socket!.on('connect', (_) {
       _isReconnecting = false;
       if (_userId != null) {
-        _socket!.emit('user:online', {'userId': _userId});
+        // 发送上线事件时附带 session token
+        _socket!.emit('user:online', {
+          'userId': _userId,
+          'token': _sessionToken,
+        });
         _flushOfflineBuffer(); // 重连后补传离线缓存
       }
     });
@@ -82,72 +102,108 @@ class SocketService {
 
     // 位置更新
     _socket!.on('member:location', (data) {
-      _locationController.add(MemberLocation.fromJson(Map<String, dynamic>.from(data)));
+      if (!_locationController.isClosed) {
+        _locationController.add(MemberLocation.fromJson(Map<String, dynamic>.from(data)));
+      }
     });
 
     // 成员上线
     _socket!.on('member:online', (data) {
-      _onlineController.add(data['userId'] as String);
+      if (!_onlineController.isClosed) {
+        _onlineController.add(data['userId'] as String);
+      }
     });
 
     // 成员离线
     _socket!.on('member:offline', (data) {
-      _offlineController.add(data['userId'] as String);
+      if (!_offlineController.isClosed) {
+        _offlineController.add(data['userId'] as String);
+      }
     });
 
     // 围栏警报
     _socket!.on('geofence:alert', (data) {
-      _geofenceAlertController.add(Map<String, dynamic>.from(data));
+      if (!_geofenceAlertController.isClosed) {
+        _geofenceAlertController.add(Map<String, dynamic>.from(data));
+      }
     });
 
     // 聊天消息
     _socket!.on('chat:message', (data) {
-      _chatMessageController.add(Message.fromJson(Map<String, dynamic>.from(data)));
+      if (!_chatMessageController.isClosed) {
+        _chatMessageController.add(Message.fromJson(Map<String, dynamic>.from(data)));
+      }
     });
 
     // SOS 警报
     _socket!.on('sos:alert', (data) {
-      _sosAlertController.add(SosAlert.fromJson(Map<String, dynamic>.from(data)));
+      if (!_sosAlertController.isClosed) {
+        _sosAlertController.add(SosAlert.fromJson(Map<String, dynamic>.from(data)));
+      }
     });
 
     // 表情炸弹
     _socket!.on('emoji:bomb', (data) {
-      _emojiBombController.add(Map<String, dynamic>.from(data));
+      if (!_emojiBombController.isClosed) {
+        _emojiBombController.add(Map<String, dynamic>.from(data));
+      }
     });
 
     // 想你通知
     _socket!.on('interaction:care', (data) {
-      _thinkingOfYouController.add(Map<String, dynamic>.from(data));
+      if (!_thinkingOfYouController.isClosed) {
+        _thinkingOfYouController.add(Map<String, dynamic>.from(data));
+      }
     });
 
     // 存活警告（24小时无更新）
     _socket!.on('alive:warning', (data) {
-      _aliveWarningController.add(Map<String, dynamic>.from(data));
+      if (!_aliveWarningController.isClosed) {
+        _aliveWarningController.add(Map<String, dynamic>.from(data));
+      }
     });
 
     // 碰撞警报（急减速）
     _socket!.on('collision:alert', (data) {
-      _collisionAlertController.add(Map<String, dynamic>.from(data));
+      if (!_collisionAlertController.isClosed) {
+        _collisionAlertController.add(Map<String, dynamic>.from(data));
+      }
     });
 
     // 行程报告（离开某地）
     _socket!.on('trip:report', (data) {
-      _tripReportController.add(Map<String, dynamic>.from(data));
+      if (!_tripReportController.isClosed) {
+        _tripReportController.add(Map<String, dynamic>.from(data));
+      }
     });
 
     // 成员加入圈子
     _socket!.on('circle:join', (data) {
-      _memberJoinedController.add(Map<String, dynamic>.from(data));
+      if (!_memberJoinedController.isClosed) {
+        _memberJoinedController.add(Map<String, dynamic>.from(data));
+      }
     });
 
     // 低电量通知（4.4新功能）
     _socket!.on('battery:low', (data) {
-      _lowBatteryController.add(Map<String, dynamic>.from(data));
+      if (!_lowBatteryController.isClosed) {
+        _lowBatteryController.add(Map<String, dynamic>.from(data));
+      }
     });
 
     // 4.6 到家/离家自动通知
     _socket!.on('home:status', (data) {
-      _homeStatusController.add(Map<String, dynamic>.from(data));
+      if (!_homeStatusController.isClosed) {
+        _homeStatusController.add(Map<String, dynamic>.from(data));
+      }
+    });
+
+    // 多设备互踢：收到强制登出通知
+    _socket!.on('force_logout', (data) {
+      print('[Socket] 收到 force_logout: $data');
+      if (!_forceLogoutController.isClosed) {
+        _forceLogoutController.add(Map<String, dynamic>.from(data));
+      }
     });
   }
 
@@ -189,12 +245,7 @@ class SocketService {
     for (final payload in batch) {
       _socket?.emit('location:update', payload);
     }
-    debugPrint('[Socket] 补传离线位置 ${batch.length} 条');
-  }
-
-  static void debugPrint(String msg) {
-    // 简单日志输出
-    print(msg);
+    print('[Socket] 补传离线位置 ${batch.length} 条');
   }
 
   /// 发送表情炸弹
@@ -207,14 +258,16 @@ class SocketService {
     _socket?.emit('interaction:care', {'userId': userId, 'userName': userName});
   }
 
-  /// 断开连接
+  /// 断开连接（页面级调用，只断开 Socket，不关闭 Stream）
   void disconnect() {
     _socket?.disconnect();
     _socket = null;
   }
 
-  /// 释放资源
+  /// 释放资源（应用退出时由 main.dart 调用，页面不要调用）
   void dispose() {
+    _isDisposed = true;
+    disconnect();
     _locationController.close();
     _onlineController.close();
     _offlineController.close();
@@ -228,5 +281,7 @@ class SocketService {
     _tripReportController.close();
     _memberJoinedController.close();
     _lowBatteryController.close();
+    _homeStatusController.close();
+    _forceLogoutController.close();
   }
 }

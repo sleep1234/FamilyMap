@@ -10,6 +10,7 @@ class AppUser {
   final bool isSleeping;    // 睡眠状态
   final String ghostMode;   // off / invisible / blur
   final String? username;   // 登录用户名
+  final String? token;      // 会话 token（多设备互踢用）
   final DateTime? createdAt;
 
   AppUser({
@@ -20,6 +21,7 @@ class AppUser {
     this.isSleeping = false,
     this.ghostMode = 'off',
     this.username,
+    this.token,
     this.createdAt,
   });
 
@@ -31,6 +33,7 @@ class AppUser {
         isSleeping: (json['is_sleeping'] ?? 0) == 1,
         ghostMode: json['ghost_mode'] ?? 'off',
         username: json['username'],
+        token: json['token'],
         createdAt: json['created_at'] != null
             ? DateTime.tryParse(json['created_at'])
             : null,
@@ -44,6 +47,7 @@ class AppUser {
         'is_sleeping': isSleeping ? 1 : 0,
         'ghost_mode': ghostMode,
         'username': username,
+        'token': token,
       };
 }
 

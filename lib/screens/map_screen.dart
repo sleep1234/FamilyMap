@@ -12,6 +12,8 @@ import '../models/models.dart';
 import '../services/socket_service.dart';
 import '../services/api_service.dart';
 import '../services/gps_debug_logger.dart';
+import '../services/notification_service.dart';
+import '../main.dart'; // SplashScreen（force_logout 时跳转登录页）
 import '../widgets/trail_particles.dart';
 import '../widgets/member_marker.dart';
 import '../widgets/sim_controller.dart';
@@ -62,14 +64,19 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
   int _activityConfidenceCount = 0;
   static const int _activityConfidenceThreshold = 3; // 连续3次相同才切换
 
-  // 1.4 速度滑动窗口（5点平均，过滤GPS噪声）
-  final List<double> _speedWindow = [];
-  static const int _speedWindowSize = 9;
+  // 1.4 速度滤波：指数加权移动平均（EWMA），比简单平均响应更快
+  double _ewmaSpeed = 0.0; // 当前滤波速度
+  static const double _ewmaAlpha = 0.4; // 新值权重 0.4，旧值 0.6（0=all old, 1=no filter）
+  // 辅助：近期最大速度（用于判断是否刚从高速减速，避免过早归零）
+  double _recentMaxSpeed = 0.0;
+  static const int _maxSpeedDecayFrames = 5; // 最大速度衰减帧数
+  int _maxSpeedDecayCounter = 0;
 
   // 1.1 自适应上报频率：根据移动状态动态调整定时器间隔
   // 静止30s，步行/骑行10s，驾车3-5s
   Duration _currentReportInterval = const Duration(seconds: 10);
   Position? _lastReportedPosition; // 上次上报位置，用于GPS跳点检测
+  Position? _lastAccuratePosition; // 上次高精度位置（≤20m），精度差时上报此坐标防飘
 
   // 围栏创建：长按地图选点
   LatLng? _geofencePinPos; // 围栏钉子位置（GCJ-02）
@@ -97,6 +104,9 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
   int? _myBatteryLevel;
   bool _myCharging = false;
   StreamSubscription<BatteryState>? _batterySub;
+
+  // Socket 事件订阅（统一管理，dispose 时批量取消）
+  final List<StreamSubscription> _socketSubscriptions = [];
 
   // 可拖动底部面板 - 三档弹簧吸附
   double _panelHeight = 100;
@@ -137,15 +147,28 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
   @override
   void initState() {
     super.initState();
+    _initNotifications(); // 初始化系统通知 + 请求权限
     _initLocation();
     _loadCircles();
     _loadSettings();
     _loadGpsDebugFlag(); // 读取GPS调试开关
     _onlineMembers.add(widget.currentUser.id); // 自己在线
-    _socketService.connect(widget.currentUser.id);
+    _socketService.connect(widget.currentUser.id, token: widget.currentUser.token);
     _listenSocketEvents();
     _initActivityRecognition();
     _initBattery();
+  }
+
+  /// 初始化系统通知服务，请求通知权限，显示前台常驻通知
+  Future<void> _initNotifications() async {
+    final notif = NotificationService();
+    await notif.init();
+    await notif.requestPermission();
+    // 显示前台服务常驻通知（表示位置共享活跃）
+    await notif.showForegroundNotification(
+      title: 'FamilyMap',
+      body: '位置共享服务运行中',
+    );
   }
 
   Future<void> _loadGpsDebugFlag() async {
@@ -166,9 +189,20 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
     _simTimer?.cancel();
     _activityStream?.cancel();
     _batterySub?.cancel();
+    // 取消 Socket 事件订阅（不 dispose SocketService 单例，ChatScreen 等页面也在用）
+    _cancelSocketSubscriptions();
     _socketService.disconnect();
-    _socketService.dispose();
+    // 关闭前台常驻通知
+    NotificationService().cancelForegroundNotification();
     super.dispose();
+  }
+
+  /// 批量取消 Socket 事件订阅
+  void _cancelSocketSubscriptions() {
+    for (final sub in _socketSubscriptions) {
+      sub.cancel();
+    }
+    _socketSubscriptions.clear();
   }
 
   // ==================== 初始化 ====================
@@ -304,6 +338,18 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
       if (s.darkMode != widget.darkMode) {
         widget.onDarkModeChanged(s.darkMode);
       }
+      // 更新前台通知文字（反映位置共享状态）
+      if (s.sharePaused) {
+        NotificationService().showForegroundNotification(
+          title: 'FamilyMap',
+          body: '位置共享已暂停',
+        );
+      } else {
+        NotificationService().showForegroundNotification(
+          title: 'FamilyMap',
+          body: '位置共享服务运行中',
+        );
+      }
     } catch (_) {}
   }
 
@@ -412,17 +458,25 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
     }
   }
 
-  /// 获取滑动窗口平均速度（5点平滑，过滤GPS噪声）
-  double _getAverageSpeed() {
-    if (_speedWindow.isEmpty) return _currentPosition?.speed ?? 0.0;
-    final sum = _speedWindow.fold<double>(0.0, (a, b) => a + b);
-    return sum / _speedWindow.length;
+  /// 获取EWMA滤波速度
+  double _getFilteredSpeed() => _ewmaSpeed;
+
+  /// 获取当前有效速度
+  /// - 模拟模式直接用设定值
+  /// - 精度 > 50m → 0（GPS信号极差，速度完全不可信）
+  /// - EWMA速度 < 0.5km/h（0.14m/s）→ 0（排除极低速噪声）
+  /// - 否则用EWMA滤波速度
+  double get _effectiveSpeed {
+    if (_simMode) return _simSpeedMs;
+    // 精度极差时速度不可信
+    final accuracy = _currentPosition?.accuracy ?? 999;
+    if (accuracy > 50) return 0.0;
+    // 极低速视为静止
+    if (_ewmaSpeed < 0.14) return 0.0; // 0.14m/s ≈ 0.5km/h
+    return _isCurrentlyMoving ? _ewmaSpeed : 0.0;
   }
 
-  /// 获取当前有效速度（模拟模式直接用设定值，否则走滑动窗口）
-  double get _effectiveSpeed => _simMode ? _simSpeedMs : (_isCurrentlyMoving ? _getAverageSpeed() : 0.0);
-
-  /// 当前是否在移动（模拟模式直接看速度，否则活动识别 + 滑动窗口速度双判断）
+  /// 当前是否在移动（模拟模式直接看速度，否则活动识别 + 速度双判断）
   bool get _isCurrentlyMoving {
     // 模拟模式：直接用设定速度判断
     if (_simMode) return _simSpeedMs > 1.0;
@@ -434,10 +488,10 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
         _currentActivity == ar.ActivityType.running) {
       return true;
     }
-    // unknown/still 时用滑动窗口平均速度判断（比单点更稳定）
+    // unknown/still 时用EWMA速度判断
     if (_currentActivity == ar.ActivityType.unknown ||
         _currentActivity == ar.ActivityType.still) {
-      return _getAverageSpeed() > 1.0; // 1.0m/s ≈ 3.6km/h，散步起步
+      return _ewmaSpeed > 0.5; // 0.5m/s ≈ 1.8km/h，慢走起步
     }
     return false;
   }
@@ -450,11 +504,22 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
     _gpsStreamActive = true;
 
     // 监听GPS位置变化
-    // Android 14+ 需要用 AndroidSettings 确保位置流可靠
+    // Android 需要前台服务通知才能在后台持续收到位置更新
     _positionStream = Geolocator.getPositionStream(
-      locationSettings: LocationSettings(
+      locationSettings: AndroidSettings(
         accuracy: LocationAccuracy.high,
         distanceFilter: 0, // 不过滤，每次GPS更新都接收
+        // 前台服务通知配置：让 Android 系统知道这是后台位置追踪，不会被杀
+        foregroundNotificationConfig: const ForegroundNotificationConfig(
+          notificationText: '正在后台追踪您的位置',
+          notificationTitle: 'FamilyMap',
+          notificationChannelName: '后台位置追踪',
+          enableWakeLock: true, // 保持CPU唤醒
+          notificationIcon: AndroidResource(name: 'ic_launcher', defType: 'mipmap'),
+          setOngoing: true, // 常驻通知
+        ),
+        // 间隔设置：后台时也持续更新
+        intervalDuration: const Duration(seconds: 3),
       ),
     ).listen(
       (pos) {
@@ -581,11 +646,24 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
       GpsDebugLogger.instance.log(entry);
     }
 
-    // 2. 仅非模拟模式下更新速度滑动窗口（模拟模式用 _simSpeedMs 直接上报）
+    // 2. 仅非模拟模式下更新速度EWMA滤波（模拟模式用 _simSpeedMs 直接上报）
+    //    精度 > 50m 的数据不更新（GPS极差时速度噪声大）
     if (!_simMode && pos.accuracy <= 50) {
-      _speedWindow.add(pos.speed);
-      if (_speedWindow.length > _speedWindowSize) {
-        _speedWindow.removeAt(0);
+      final rawSpeed = pos.speed;
+      // EWMA：新速度 = α × 本次速度 + (1-α) × 上次滤波速度
+      // α=0.4 比简单9点平均响应快得多：90%响应需 ~4步 vs 9步
+      _ewmaSpeed = _ewmaAlpha * rawSpeed + (1 - _ewmaAlpha) * _ewmaSpeed;
+      // 更新近期最大速度（用于急减速检测等）
+      if (rawSpeed > _recentMaxSpeed) {
+        _recentMaxSpeed = rawSpeed;
+        _maxSpeedDecayCounter = _maxSpeedDecayFrames;
+      } else if (_maxSpeedDecayCounter > 0) {
+        _maxSpeedDecayCounter--;
+        if (_maxSpeedDecayCounter == 0) _recentMaxSpeed = _ewmaSpeed;
+      }
+      // 精度 ≤ 20m 时记录高精度位置
+      if (pos.accuracy <= 20) {
+        _lastAccuratePosition = pos;
       }
     }
 
@@ -598,65 +676,74 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
     // 模拟模式直接用设定速度，不走滑动窗口平均
     final effectiveSpeed = _effectiveSpeed;
 
+    // 上报位置：精度 > 20m 时用上一次高精度坐标（心跳保活，但不污染停留检测）
+    //            不上报漂移坐标，防止服务器误判为"离开停留点"
+    final reportPos = (pos.accuracy > 20 && _lastAccuratePosition != null && !forceUpdate)
+        ? _lastAccuratePosition!
+        : pos;
+
     _socketService.sendLocationUpdate(
       userId: widget.currentUser.id,
-      latitude: pos.latitude,
-      longitude: pos.longitude,
-      accuracy: pos.accuracy,
+      latitude: reportPos.latitude,
+      longitude: reportPos.longitude,
+      accuracy: reportPos.accuracy,
       speed: effectiveSpeed,
       batteryLevel: _myBatteryLevel,
       isCharging: _myCharging,
     );
     _lastReportedPosition = pos;
 
-    // 逆地理解码防抖：位置更新时延迟2秒后调一次API获取自己的地址
+    // 逆地理解码防抖：仅用高精度位置请求（避免漂移坐标覆盖真实地址）
     _geocodeDebounce?.cancel();
-    _geocodeDebounce = Timer(const Duration(seconds: 2), () async {
-      try {
-        final result = await _apiService.reverseGeocode(pos.latitude, pos.longitude);
-        // 优先用完整 address（如"浙江省台州市椒江区章安街道竹岙村"），formatted 只有街道名
-        final addr = (result['address'] as String?)?.isNotEmpty == true
-            ? result['address'] as String
-            : (result['formatted'] as String? ?? '');
-        debugPrint('[Geocode] 自己的逆地理结果: addr="$addr", formatted=${result['formatted']}, address=${result['address']}');
-        if (addr.isNotEmpty && mounted) {
-          setState(() {
-            _myAddress = addr;
-            final idx = _members.indexWhere((m) => m['id'] == widget.currentUser.id);
-            if (idx >= 0) {
-              _members[idx]['address'] = addr;
-              debugPrint('[Geocode] 已更新 _members[$idx].address = "$addr"');
-            } else {
-              debugPrint('[Geocode] 自己不在 _members 中，无法更新地址');
-            }
-          });
-        } else {
-          debugPrint('[Geocode] 逆地理结果为空，未更新');
+    if (pos.accuracy <= 20) {
+      _geocodeDebounce = Timer(const Duration(seconds: 2), () async {
+        try {
+          final result = await _apiService.reverseGeocode(pos.latitude, pos.longitude);
+          final addr = (result['address'] as String?)?.isNotEmpty == true
+              ? result['address'] as String
+              : (result['formatted'] as String? ?? '');
+          debugPrint('[Geocode] 自己的逆地理结果: addr="$addr"');
+          if (addr.isNotEmpty && mounted) {
+            setState(() {
+              _myAddress = addr;
+              final idx = _members.indexWhere((m) => m['id'] == widget.currentUser.id);
+              if (idx >= 0) {
+                _members[idx]['address'] = addr;
+              }
+            });
+          }
+        } catch (e) {
+          debugPrint('[Geocode] 异常: $e');
         }
-      } catch (e) {
-        debugPrint('[Geocode] 异常: $e');
-      }
-    });
+      });
+    }
 
     // 更新自己的trail（使用GCJ-02坐标显示在地图上）
+    // 精度 > 20m 时不更新标记位置（避免GPS漂移导致头像在地图上乱跳）
+    // 但仍然上报位置给服务器（只是本地显示不做抖动）
     final myKey = widget.currentUser.id;
-    final gcjPos = _wgs84ToGcj02(pos.latitude, pos.longitude);
-    final movementType = _getMovementType();
+    final accuracy = pos.accuracy;
+    final shouldUpdateMarker = accuracy <= 20 || forceUpdate;
 
-    if (_memberTrails.containsKey(myKey)) {
-      final trail = _memberTrails[myKey]!;
-      trail.updatePosition(gcjPos, gpsSpeed: effectiveSpeed);
-      trail.overrideMovementType = movementType;
-    } else {
-      final trail = MemberTrail(
-        userId: myKey,
-        name: widget.currentUser.name,
-        color: _parseColor(widget.currentUser.avatarColor),
-        currentPos: gcjPos,
-        speed: effectiveSpeed,
-      );
-      trail.overrideMovementType = movementType;
-      _memberTrails[myKey] = trail;
+    if (shouldUpdateMarker) {
+      final gcjPos = _wgs84ToGcj02(pos.latitude, pos.longitude);
+      final movementType = _getMovementType();
+
+      if (_memberTrails.containsKey(myKey)) {
+        final trail = _memberTrails[myKey]!;
+        trail.updatePosition(gcjPos, gpsSpeed: effectiveSpeed);
+        trail.overrideMovementType = movementType;
+      } else {
+        final trail = MemberTrail(
+          userId: myKey,
+          name: widget.currentUser.name,
+          color: _parseColor(widget.currentUser.avatarColor),
+          currentPos: gcjPos,
+          speed: effectiveSpeed,
+        );
+        trail.overrideMovementType = movementType;
+        _memberTrails[myKey] = trail;
+      }
     }
   }
 
@@ -664,7 +751,7 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
 
   void _listenSocketEvents() {
     // 成员位置更新
-    _socketService.onMemberLocation.listen((loc) {
+    _socketSubscriptions.add(_socketService.onMemberLocation.listen((loc) {
       debugPrint('[Socket] member:location: userId=${loc.userId}, address=${loc.address}, lat=${loc.latitude}, lng=${loc.longitude}');
       setState(() {
         // 更新 _members 中的地址和电量等字段（自己也处理，服务器已补发自发自收）
@@ -708,85 +795,109 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
         final name = idx >= 0 ? (_members[idx]['name'] ?? '未知') : '未知';
         final color = idx >= 0 ? _parseColor(_members[idx]['avatar_color'] ?? '#64748B') : _parseColor('#64748B');
         final gcjPos = _wgs84ToGcj02(loc.latitude, loc.longitude);
+        // 精度 > 20m 时不更新标记位置（避免其他成员也飘）
+        final memberAccuracy = loc.accuracy ?? 999;
+        final shouldMoveMarker = memberAccuracy <= 20;
 
-        if (_memberTrails.containsKey(loc.userId)) {
-          _memberTrails[loc.userId]!.updatePosition(gcjPos, gpsSpeed: loc.speed);
-        } else {
-          _memberTrails[loc.userId] = MemberTrail(
-            userId: loc.userId,
-            name: name,
-            color: color,
-            currentPos: gcjPos,
-            speed: loc.speed ?? 0,
-            lastUpdate: loc.recordedAt,
-          );
+        if (shouldMoveMarker) {
+          if (_memberTrails.containsKey(loc.userId)) {
+            _memberTrails[loc.userId]!.updatePosition(gcjPos, gpsSpeed: loc.speed);
+          } else {
+            _memberTrails[loc.userId] = MemberTrail(
+              userId: loc.userId,
+              name: name,
+              color: color,
+              currentPos: gcjPos,
+              speed: loc.speed ?? 0,
+              lastUpdate: loc.recordedAt,
+            );
+          }
         }
       });
-    });
+    }));
 
     // 成员上线
-    _socketService.onMemberOnline.listen((userId) {
+    _socketSubscriptions.add(_socketService.onMemberOnline.listen((userId) {
       if (!mounted) return;
       setState(() {
         _onlineMembers.add(userId);
       });
       debugPrint('[Online] $userId 上线');
       _loadMembers();
-    });
+    }));
 
     // 成员离线
-    _socketService.onMemberOffline.listen((userId) {
+    _socketSubscriptions.add(_socketService.onMemberOffline.listen((userId) {
       if (!mounted) return;
       setState(() {
         _onlineMembers.remove(userId);
       });
       debugPrint('[Online] $userId 离线');
-    });
+    }));
 
-    // 围栏警报
-    _socketService.onGeofenceAlert.listen((data) {
+    // 围栏警报 → 系统悬浮通知
+    _socketSubscriptions.add(_socketService.onGeofenceAlert.listen((data) {
       if (!mounted) return;
+      final action = data['action'] == 'entered' ? '进入了' : '离开了';
+      final userName = data['userName'] ?? '某人';
+      final fenceName = data['fenceName'] ?? '围栏';
+      // 发送系统通知（悬浮通知）
+      NotificationService().showGeofenceAlert(
+        userName: userName,
+        action: data['action'] == 'entered' ? 'entered' : 'left',
+        fenceName: fenceName,
+      );
+      // 同时在应用内也显示提示
       _showNotification(
-        '${data['userName']} ${data['action'] == 'entered' ? '进入' : '离开'}了 ${data['fenceName']}',
+        '$userName $action $fenceName',
         icon: data['action'] == 'entered' ? Icons.login : Icons.logout,
       );
-    });
+    }));
 
     // 聊天消息
-    _socketService.onChatMessage.listen((msg) {
+    _socketSubscriptions.add(_socketService.onChatMessage.listen((msg) {
       if (!mounted) return;
       if (msg.userId == widget.currentUser.id) return;
       _showNotification(
         '${msg.userName}: ${msg.content}',
         icon: Icons.chat_bubble,
       );
-    });
+    }));
 
-    // SOS 警报
-    _socketService.onSosAlert.listen((alert) {
+    // SOS 警报 → 系统通知 + 应用内弹窗
+    _socketSubscriptions.add(_socketService.onSosAlert.listen((alert) {
       if (!mounted) return;
       _vibrate();
+      // 系统悬浮通知
+      NotificationService().showSosAlert(
+        userName: alert.userId,
+        address: alert.address,
+      );
       _showSosDialog(alert);
-    });
+    }));
 
     // 表情炸弹
-    _socketService.onEmojiBomb.listen((data) {
+    _socketSubscriptions.add(_socketService.onEmojiBomb.listen((data) {
       if (!mounted) return;
       _triggerEmojiBomb(data['emoji'] ?? '❤️', (data['count'] ?? 10) as int);
-    });
+    }));
 
-    // 想你通知
-    _socketService.onThinkingOfYou.listen((data) {
+    // 想你通知 → 系统通知
+    _socketSubscriptions.add(_socketService.onThinkingOfYou.listen((data) {
       if (!mounted) return;
+      final fromName = data['fromUserName'] ?? '某人';
+      // 系统悬浮通知
+      NotificationService().showThinkingOfYou(fromUserName: fromName);
+      // 应用内也显示
       _showNotification(
-        '${data['fromUserName']} 想你了~',
+        '$fromName 想你了~',
         icon: Icons.favorite,
         color: const Color(0xFFEC4899),
       );
-    });
+    }));
 
     // 存活警告（P1提升：弹出确认对话框而非仅SnackBar）
-    _socketService.onAliveWarning.listen((data) {
+    _socketSubscriptions.add(_socketService.onAliveWarning.listen((data) {
       if (!mounted) return;
       final userName = data['userName'] as String? ?? '某人';
       final hours = data['hours'] ?? 24;
@@ -819,26 +930,26 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
           ],
         ),
       );
-    });
+    }));
 
     // 碰撞警报（1.5改进：全屏红色警告卡片 + 拨打电话/发送关怀按钮）
-    _socketService.onCollisionAlert.listen((data) {
+    _socketSubscriptions.add(_socketService.onCollisionAlert.listen((data) {
       if (!mounted) return;
       _vibrate();
       _showCollisionAlert(data);
-    });
+    }));
 
     // 行程报告
-    _socketService.onTripReport.listen((data) {
+    _socketSubscriptions.add(_socketService.onTripReport.listen((data) {
       if (!mounted) return;
       _showNotification(
         '${data['userName']} ${data['action'] == 'left' ? '离开了' : '到达了'} ${data['address']}（停留${data['duration']}分钟）',
         icon: Icons.trip_origin,
       );
-    });
+    }));
 
     // 成员加入圈子 - 刷新成员列表和圈子列表
-    _socketService.onMemberJoined.listen((data) {
+    _socketSubscriptions.add(_socketService.onMemberJoined.listen((data) {
       if (!mounted) return;
       _loadMembers();
       _loadCircles();
@@ -846,20 +957,20 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
         '${data['userName']} 加入了圈子',
         icon: Icons.person_add,
       );
-    });
+    }));
 
     // 低电量自动通知（4.4新功能）
-    _socketService.onLowBattery.listen((data) {
+    _socketSubscriptions.add(_socketService.onLowBattery.listen((data) {
       if (!mounted) return;
       _showNotification(
         '${data['userName']} 电量仅剩 ${data['batteryLevel']}%！',
         icon: Icons.battery_alert,
         color: Colors.orange,
       );
-    });
+    }));
 
     // 4.6 到家/离家自动通知
-    _socketService.onHomeStatus.listen((data) {
+    _socketSubscriptions.add(_socketService.onHomeStatus.listen((data) {
       if (!mounted) return;
       final action = data['action'] as String? ?? '';
       final userName = data['userName'] as String? ?? '某人';
@@ -876,7 +987,52 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
           color: const Color(0xFF6366F1), // 紫色
         );
       }
-    });
+    }));
+
+    // 多设备互踢：收到强制登出通知
+    _socketSubscriptions.add(_socketService.onForceLogout.listen((data) async {
+      if (!mounted) return;
+      final reason = data['reason'] as String? ?? '账号已在其他设备登录';
+      // 1. 断开 Socket 连接
+      _socketService.disconnect();
+      // 2. 停止位置追踪
+      _positionStream?.cancel();
+      _periodicSendTimer?.cancel();
+      // 3. 清除本地存储的登录信息
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove('familymap_user');
+      // 4. 显示提示并跳转到登录页
+      if (mounted) {
+        showDialog(
+          context: context,
+          barrierDismissible: false,
+          builder: (ctx) => AlertDialog(
+            title: const Row(children: [
+              Icon(Icons.logout, color: Colors.red, size: 28),
+              SizedBox(width: 8),
+              Text('被迫下线'),
+            ]),
+            content: Text(reason),
+            actions: [
+              TextButton(
+                onPressed: () {
+                  Navigator.pop(ctx); // 关闭对话框
+                  // 跳转到登录页（清空整个导航栈）
+                  Navigator.of(context).pushAndRemoveUntil(
+                    MaterialPageRoute(builder: (_) => SplashScreen(
+                      darkMode: _isDark,
+                      onDarkModeChanged: widget.onDarkModeChanged,
+                    )),
+                    (route) => false,
+                  );
+                },
+                child: const Text('重新登录'),
+              ),
+            ],
+          ),
+        );
+      }
+    }));
   }
 
   // ==================== 数据加载 ====================
@@ -993,8 +1149,11 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
     if (_currentCircle == null) return;
     try {
       final fences = await _apiService.getGeofences(_currentCircle!.id);
+      debugPrint('[围栏] 加载了 ${fences.length} 个围栏（圈子: ${_currentCircle!.name}）');
       setState(() => _geofences = fences);
-    } catch (_) {}
+    } catch (e) {
+      debugPrint('[围栏] 加载失败: $e');
+    }
   }
 
   // ==================== SOS ====================
@@ -1243,9 +1402,9 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
           children: [
             Column(
               children: [
-                _buildHeader(),
-                Expanded(child: _buildMap()),
-                _buildBottomPanel(),
+                RepaintBoundary(child: _buildHeader()),
+                Expanded(child: RepaintBoundary(child: _buildMap())),
+                RepaintBoundary(child: _buildBottomPanel()),
               ],
             ),
             // GPS调试浮窗
@@ -1328,6 +1487,8 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
           options: MapOptions(
             initialCenter: LatLng(39.9042, 116.4074),
             initialZoom: 13,
+            maxZoom: 19, // 高德瓦片最高支持18级，留1级用插值放大
+            minZoom: 3,
             interactionOptions: const InteractionOptions(flags: InteractiveFlag.all),
             // 长按地图选点创建围栏
             onLongPress: (position, point) {
@@ -1342,11 +1503,15 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
           children: [
             TileLayer(
               // 1.6 深色模式适配：高德暗色瓦片需要用wprd域名(style=7)
-              urlTemplate: widget.darkMode || _userSettings?.darkMode == true
+              // 加 key 强制切换暗色/亮色时重建整个瓦片层（清除缓存）
+              key: ValueKey(_isDark),
+              urlTemplate: _isDark
                   ? 'https://wprd0{s}.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=2&style=7&x={x}&y={y}&z={z}'
                   : 'https://webrd0{s}.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=2&style=8&x={x}&y={y}&z={z}',
               subdomains: const ['1', '2', '3', '4'],
-              maxZoom: 18,
+              maxZoom: 19, // 允许用户多放大1级（插值放大）
+              maxNativeZoom: 18, // 高德瓦片原生最高18级，超出时复用18级瓦片放大
+              minNativeZoom: 3,
             ),
             // 4.5 热力图层 - 用渐变色圆点表示停留密度
             if (_showHeatmap && _heatmapPoints.isNotEmpty)
@@ -1360,7 +1525,7 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
                     intensity,
                   )!.withOpacity(0.3 + intensity * 0.4);
                   return CircleMarker(
-                    point: LatLng((p['lat'] as num).toDouble(), (p['lng'] as num).toDouble()),
+                    point: _wgs84ToGcj02((p['lat'] as num).toDouble(), (p['lng'] as num).toDouble()),
                     radius: 50 + intensity * 100, // 50-150米半径
                     useRadiusInMeter: true,
                     color: color,
@@ -1430,21 +1595,22 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
               ),
             ),
           ),
-        // 缩放控件
+        // 缩放控件（RepaintBoundary 隔离，避免地图缩放时按钮闪烁）
         Positioned(
           right: 8,
           top: 8,
-          child: Column(
+          child: RepaintBoundary(child: Column(
             children: [
-              _zoomButton(Icons.add, () => _mapController.move(_mapController.camera.center, _mapController.camera.zoom + 1)),
+              _zoomButton(Icons.add, () => _mapController.move(_mapController.camera.center, _mapController.camera.zoom + 1), tooltip: '放大'),
               const SizedBox(height: 4),
-              _zoomButton(Icons.remove, () => _mapController.move(_mapController.camera.center, _mapController.camera.zoom - 1)),
+              _zoomButton(Icons.remove, () => _mapController.move(_mapController.camera.center, _mapController.camera.zoom - 1), tooltip: '缩小'),
               const SizedBox(height: 8),
-              // 4.5 热力图切换按钮
+              // 4.5 热力图切换按钮（显示最近7天停留密度）
               _zoomButton(
                 _showHeatmap ? Icons.layers_clear : Icons.layers,
                 _toggleHeatmap,
                 color: _showHeatmap ? Colors.blue : null,
+                tooltip: _showHeatmap ? '关闭停留热力图' : '显示停留热力图',
               ),
               const SizedBox(height: 8),
               // 模拟驾驶切换按钮
@@ -1458,11 +1624,30 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
                   }
                 },
                 color: _simMode ? Colors.orange : null,
+                tooltip: _simMode ? '关闭模拟驾驶' : '开启模拟驾驶',
               ),
             ],
-          ),
+          )),
         ),
-        // 暂停共享标记
+        // 热力图提示标签
+        if (_showHeatmap)
+          Positioned(
+            left: 8,
+            top: 8,
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+              decoration: BoxDecoration(
+                color: Colors.blue.shade100,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(color: Colors.blue),
+              ),
+              child: const Row(children: [
+                Icon(Icons.layers, color: Colors.blue, size: 16),
+                SizedBox(width: 4),
+                Text('停留热力图（近7天）', style: TextStyle(color: Colors.blue, fontSize: 12, fontWeight: FontWeight.w500)),
+              ]),
+            ),
+          ),
         if (_userSettings?.sharePaused == true)
           Positioned(
             left: 8,
@@ -1485,18 +1670,19 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
     );
   }
 
-  Widget _zoomButton(IconData icon, VoidCallback onPressed, {Color? color}) {
+  Widget _zoomButton(IconData icon, VoidCallback onPressed, {Color? color, String? tooltip}) {
     return Container(
       decoration: BoxDecoration(
         color: color ?? Colors.white,
         borderRadius: BorderRadius.circular(4),
-        boxShadow: const [BoxShadow(color: Colors.black12, blurRadius: 4)],
+        boxShadow: const [BoxShadow(color: Color(0x1F000000), blurRadius: 4)],
       ),
       child: IconButton(
         icon: Icon(icon, size: 18, color: color != null ? Colors.white : null),
         onPressed: onPressed,
         padding: const EdgeInsets.all(4),
         constraints: const BoxConstraints(minWidth: 32, minHeight: 32),
+        tooltip: tooltip,
       ),
     );
   }
@@ -1800,13 +1986,14 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
                 if (trail?.isMoving != true && stayAddress != null && stayAddress.isNotEmpty) ...[
                   const SizedBox(height: 2),
                   Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       const Icon(Icons.location_on, size: 11, color: Color(0xFF94A3B8)),
                       const SizedBox(width: 2),
                       Expanded(child: Text(
                         stayAddress,
                         style: const TextStyle(fontSize: 11, color: Color(0xFF94A3B8)),
-                        maxLines: 1,
+                        maxLines: 2,
                         overflow: TextOverflow.ellipsis,
                       )),
                     ],
@@ -1822,13 +2009,14 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
                 ] else if (address != null && address.isNotEmpty) ...[
                   const SizedBox(height: 2),
                   Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       const Icon(Icons.location_on, size: 11, color: Color(0xFF94A3B8)),
                       const SizedBox(width: 2),
                       Expanded(child: Text(
                         address,
                         style: const TextStyle(fontSize: 11, color: Color(0xFF94A3B8)),
-                        maxLines: 1,
+                        maxLines: 2,
                         overflow: TextOverflow.ellipsis,
                       )),
                     ],
@@ -2164,7 +2352,7 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
     return sortedTrails.map((trail) {
       final isMe = trail.userId == widget.currentUser.id;
       final member = _members.firstWhere(
-        (m) => m['id'] == trail.userId, orElse: () => {},
+        (m) => m['id'] == trail.userId, orElse: () => <String, dynamic>{},
       );
       final isOnline = _onlineMembers.contains(trail.userId);
       final pos = adjustedPositions[trail.userId] ?? trail.currentPos;
@@ -2173,9 +2361,12 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
       final charging = isMe ? _myCharging : ((member['is_charging'] ?? 0) == 1);
       return Marker(
         point: pos,
-        width: 110,
+        width: 130,
         height: 140,
-        child: MemberMarker(
+        // alignment 对准头像中心：left=65(130/2), top=60(速度标签20+在线标签18+头像半径22)
+        alignment: Marker.computePixelAlignment(width: 130, height: 140, left: 65, top: 60),
+        // RepaintBoundary：每个标记独立重绘，一个标记变化不会影响其他
+        child: RepaintBoundary(child: MemberMarker(
           name: trail.name,
           color: trail.color,
           isMe: isMe,
@@ -2189,7 +2380,7 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
           stayMinutes: member['stay_minutes'] as int?,
           onTap: () => _showMemberDetail(trail, member),
           index: markerIndex++,
-        ),
+        )),
       );
     }).toList();
   }
@@ -2374,7 +2565,7 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
         _currentPosition!.longitude,
         trail.currentPos.latitude,
         trail.currentPos.longitude,
-        speed: _simMode ? _simSpeedMs : (_isCurrentlyMoving ? _getAverageSpeed() : 1.0), // 默认步行速度
+        speed: _simMode ? _simSpeedMs : (_isCurrentlyMoving ? _ewmaSpeed : 1.0), // 默认步行速度
       );
       if (!mounted) return;
       final distanceKm = (result['distanceKm'] as num).toStringAsFixed(1);
@@ -2825,12 +3016,14 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
     _isLocationSharing = false;
     setState(() {});
 
-    // 如果还没有当前位置，用地图中心
+    // 如果还没有当前位置，用地图中心（注意：地图中心是 GCJ-02，需转回 WGS-84）
     if (_currentPosition == null) {
       final center = _mapController.camera.center;
+      // 地图中心是 GCJ-02 坐标，模拟模式用的是 WGS-84 的 Position（后续会 _wgs84ToGcj02 转换）
+      final wgsCenter = _gcj02ToWgs84(center.latitude, center.longitude);
       _currentPosition = Position(
-        latitude: center.latitude,
-        longitude: center.longitude,
+        latitude: wgsCenter.latitude,
+        longitude: wgsCenter.longitude,
         timestamp: DateTime.now(),
         accuracy: 5.0,
         altitude: 0,
@@ -2841,10 +3034,10 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
         speedAccuracy: 0,
         isMocked: true,
       );
-      // 初始化自己的 trail
+      // 初始化自己的 trail（使用 GCJ-02 坐标显示）
       final myKey = widget.currentUser.id;
       if (!_memberTrails.containsKey(myKey)) {
-        final gcjPos = _wgs84ToGcj02(center.latitude, center.longitude);
+        final gcjPos = _wgs84ToGcj02(wgsCenter.latitude, wgsCenter.longitude);
         _memberTrails[myKey] = MemberTrail(
           userId: myKey,
           name: widget.currentUser.name,
@@ -2854,9 +3047,9 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
       }
     }
 
-    // 启动模拟位置生成定时器（每500ms一个点）
+    // 启动模拟位置生成定时器（每100ms一个点，前台渲染更流畅）
     _simTimer?.cancel();
-    _simTimer = Timer.periodic(const Duration(milliseconds: 500), (_) {
+    _simTimer = Timer.periodic(const Duration(milliseconds: 100), (_) {
       if (!_simMoving) return; // 摇杆松开时不生成
       _generateSimPosition();
     });
@@ -2870,6 +3063,7 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
     _simTimer?.cancel();
     _simTimer = null;
     _simMoving = false;
+    _isLocationSharing = false; // 重置状态，否则 _startLocationSharing 会跳过
     setState(() {});
     // 恢复真实 GPS
     _startLocationSharing();
@@ -2887,7 +3081,7 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin {
   void _generateSimPosition() {
     if (_currentPosition == null) return;
 
-    final dt = 0.5; // 500ms 间隔
+    final dt = 0.1; // 100ms 间隔
     final dist = _simSpeedMs * dt; // 移动距离（米）
     final bearingRad = _simBearing * pi / 180;
 
