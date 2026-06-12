@@ -4,15 +4,19 @@ const { Server } = require('socket.io');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
+const bcrypt = require('bcryptjs');
 const initSqlJs = require('sql.js');
+const config = require('./config');
+const { initAuth, requireAuth } = require('./middleware/auth');
+const { validateBody, validateQuery, schemas } = require('./middleware/validate');
 
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server);
 
-const PORT = process.env.PORT || 3000;
-const DB_PATH = path.join(__dirname, 'familymap.db');
-const AMAP_KEY = process.env.AMAP_KEY || ''; // 高德API Key，环境变量配置
+const PORT = config.PORT;
+const DB_PATH = config.DB_PATH;
+const AMAP_KEY = config.AMAP_KEY; // 高德API Key，环境变量配置
 
 // ==================== 工具函数 ====================
 
@@ -168,13 +172,13 @@ function queryOne(sql, params = []) {
 function run(sql, params = []) { db.run(sql, params); saveDB(); }
 
 // ==================== 密码工具 ====================
-// 用SHA-256 + 固定盐值哈希密码（简单方案，无需bcrypt依赖）
-const PWD_SALT = 'FamilyMap2026Salt';
-function hashPassword(password) {
-  return crypto.createHash('sha256').update(PWD_SALT + password).digest('hex');
+// bcryptjs 安全哈希（纯 JS 实现，无需编译）
+const BCRYPT_ROUNDS = 10;
+async function hashPassword(password) {
+  return bcrypt.hash(password, BCRYPT_ROUNDS);
 }
-function verifyPassword(password, hash) {
-  return hashPassword(password) === hash;
+async function verifyPassword(password, hash) {
+  return bcrypt.compare(password, hash);
 }
 
 // ==================== 会话管理（多设备登录互踢） ====================
@@ -544,11 +548,8 @@ app.use(express.json({ limit: '10mb' }));
 
 // --- 用户 ---
 // 注册：用户名 + 密码 + 昵称
-app.post('/api/register', (req, res) => {
+app.post('/api/register', validateBody(schemas.register), async (req, res) => {
   const { username, password, name } = req.body;
-  if (!username || !password || !name) return res.status(400).json({ error: '用户名、密码和昵称不能为空' });
-  if (username.length < 3) return res.status(400).json({ error: '用户名至少3个字符' });
-  if (password.length < 4) return res.status(400).json({ error: '密码至少4个字符' });
 
   // 检查用户名是否已存在
   const existing = queryOne('SELECT id FROM users WHERE username = ?', [username]);
@@ -557,7 +558,7 @@ app.post('/api/register', (req, res) => {
   const id = 'u_' + Date.now().toString(36) + Math.random().toString(36).substr(2, 5);
   const colors = ['#4F46E5','#EC4899','#10B981','#F59E0B','#EF4444','#8B5CF6','#06B6D4','#F97316'];
   const avatar_color = colors[Math.floor(Math.random() * colors.length)];
-  const password_hash = hashPassword(password);
+  const password_hash = await hashPassword(password);
 
   try {
     run('INSERT INTO users (id, name, avatar_color, username, password_hash) VALUES (?, ?, ?, ?, ?)',
@@ -572,14 +573,30 @@ app.post('/api/register', (req, res) => {
 });
 
 // 登录：用户名 + 密码，返回 session token
-app.post('/api/login', (req, res) => {
+app.post('/api/login', validateBody(schemas.login), async (req, res) => {
   const { username, password, device_info } = req.body;
-  if (!username || !password) return res.status(400).json({ error: '用户名和密码不能为空' });
 
   const user = queryOne('SELECT * FROM users WHERE username = ?', [username]);
   if (!user) return res.status(401).json({ error: '用户名或密码错误' });
 
-  if (!user.password_hash || !verifyPassword(password, user.password_hash)) {
+  // 支持旧密码自动迁移（SHA-256 → bcrypt）
+  let passwordValid = false;
+  if (user.password_hash && user.password_hash.startsWith('$2a$')) {
+    // 新格式 (bcryptjs 使用 $2a$ 前缀)
+    passwordValid = await bcrypt.compare(password, user.password_hash);
+  } else if (user.password_hash) {
+    // 旧格式 (SHA-256)，验证后自动迁移
+    const oldHash = crypto.createHash('sha256').update('FamilyMap2026Salt' + password).digest('hex');
+    if (oldHash === user.password_hash) {
+      passwordValid = true;
+      // 自动迁移到 bcryptjs
+      const newHash = await bcrypt.hash(password, BCRYPT_ROUNDS);
+      run('UPDATE users SET password_hash = ? WHERE id = ?', [newHash, user.id]);
+      console.log(`[迁移] 用户 ${user.id} 密码已自动迁移到 bcrypt`);
+    }
+  }
+
+  if (!passwordValid) {
     return res.status(401).json({ error: '用户名或密码错误' });
   }
 
@@ -636,7 +653,7 @@ app.post('/api/logout', (req, res) => {
   res.json({ success: true });
 });
 
-app.put('/api/users/:userId', (req, res) => {
+app.put('/api/users/:userId', requireAuth, (req, res) => {
   const fields = [];
   const values = [];
   ['name', 'avatar_color', 'mood', 'is_sleeping', 'ghost_mode'].forEach(f => {
@@ -649,7 +666,7 @@ app.put('/api/users/:userId', (req, res) => {
 });
 
 // --- 圈子 ---
-app.post('/api/circles', (req, res) => {
+app.post('/api/circles', requireAuth, (req, res) => {
   const { name, userId } = req.body;
   if (!name || !userId) return res.status(400).json({ error: '参数不完整' });
   const id = 'c_' + Date.now().toString(36) + Math.random().toString(36).substr(2, 5);
@@ -659,7 +676,7 @@ app.post('/api/circles', (req, res) => {
   res.json({ id, name, invite_code });
 });
 
-app.post('/api/circles/join', (req, res) => {
+app.post('/api/circles/join', requireAuth, (req, res) => {
   const { inviteCode, userId } = req.body;
   if (!inviteCode || !userId) return res.status(400).json({ error: '参数不完整' });
   const circle = queryOne('SELECT * FROM circles WHERE invite_code = ?', [inviteCode]);
@@ -717,9 +734,10 @@ app.get('/api/circles/:circleId/members', (req, res) => {
 
 // --- 位置 ---
 app.get('/api/users/:userId/locations', (req, res) => {
-  const hours = parseInt(req.query.hours) || 24;
+  const hours = Math.min(Math.max(parseInt(req.query.hours) || 24, 1), 720);
   const locations = queryAll(`SELECT * FROM locations
-    WHERE user_id = ? AND recorded_at >= datetime('now', '-${hours} hours') ORDER BY recorded_at ASC`, [req.params.userId]);
+    WHERE user_id = ? AND recorded_at >= datetime('now', '-' || ? || ' hours') ORDER BY recorded_at ASC`,
+    [req.params.userId, hours]);
   res.json(locations);
 });
 
@@ -736,7 +754,7 @@ app.get('/api/circles/:circleId/geofences', (req, res) => {
   res.json(queryAll('SELECT * FROM geofences WHERE circle_id = ?', [req.params.circleId]));
 });
 
-app.post('/api/circles/:circleId/geofences', (req, res) => {
+app.post('/api/circles/:circleId/geofences', requireAuth, (req, res) => {
   const { name, latitude, longitude, radius, createdBy } = req.body;
   run('INSERT INTO geofences (circle_id, name, latitude, longitude, radius, created_by) VALUES (?, ?, ?, ?, ?, ?)',
     [req.params.circleId, name, latitude, longitude, radius || 200, createdBy]);
@@ -744,15 +762,16 @@ app.post('/api/circles/:circleId/geofences', (req, res) => {
   res.json({ id: row.id, name, latitude, longitude, radius: radius || 200 });
 });
 
-app.delete('/api/geofences/:id', (req, res) => {
+app.delete('/api/geofences/:id', requireAuth, (req, res) => {
   run('DELETE FROM geofences WHERE id = ?', [req.params.id]);
   res.json({ ok: true });
 });
 
 // --- 停留记录 ---
 app.get('/api/users/:userId/stays', (req, res) => {
-  const days = parseInt(req.query.days) || 7;
-  const stays = queryAll(`SELECT * FROM stays WHERE user_id = ? AND started_at >= datetime('now', '-${days} days') ORDER BY started_at DESC`, [req.params.userId]);
+  const days = Math.min(Math.max(parseInt(req.query.days) || 7, 1), 365);
+  const stays = queryAll(`SELECT * FROM stays WHERE user_id = ? AND started_at >= datetime('now', '-' || ? || ' days') ORDER BY started_at DESC`,
+    [req.params.userId, days]);
   res.json(stays);
 });
 
@@ -781,7 +800,7 @@ app.get('/api/users/:userId/track', (req, res) => {
 });
 
 // --- SOS ---
-app.post('/api/sos', async (req, res) => {
+app.post('/api/sos', requireAuth, async (req, res) => {
   const { userId, latitude, longitude } = req.body;
   const geoResult = await reverseGeocode(latitude, longitude);
   run('INSERT INTO sos_alerts (user_id, latitude, longitude, address) VALUES (?, ?, ?, ?)',
@@ -800,7 +819,7 @@ app.post('/api/sos', async (req, res) => {
   res.json({ ok: true, address: geoResult.address });
 });
 
-app.put('/api/sos/:id/resolve', (req, res) => {
+app.put('/api/sos/:id/resolve', requireAuth, (req, res) => {
   run('UPDATE sos_alerts SET status = ? WHERE id = ?', ['resolved', req.params.id]);
   res.json({ ok: true });
 });
@@ -818,7 +837,7 @@ app.get('/api/circles/:circleId/messages', (req, res) => {
   res.json(msgs);
 });
 
-app.post('/api/circles/:circleId/messages', (req, res) => {
+app.post('/api/circles/:circleId/messages', requireAuth, (req, res) => {
   const { userId, type, content } = req.body;
   run('INSERT INTO messages (circle_id, user_id, type, content) VALUES (?, ?, ?, ?)',
     [req.params.circleId, userId, type || 'text', content]);
@@ -835,7 +854,7 @@ app.get('/api/users/:userId/footprints', (req, res) => {
   res.json(queryAll('SELECT * FROM footprints WHERE user_id = ? ORDER BY created_at DESC', [req.params.userId]));
 });
 
-app.post('/api/users/:userId/footprints', (req, res) => {
+app.post('/api/users/:userId/footprints', requireAuth, (req, res) => {
   const { name, latitude, longitude, category } = req.body;
   run('INSERT INTO footprints (user_id, name, latitude, longitude, category) VALUES (?, ?, ?, ?, ?)',
     [req.params.userId, name, latitude, longitude, category || 'other']);
@@ -843,7 +862,7 @@ app.post('/api/users/:userId/footprints', (req, res) => {
   res.json({ id: row.id, name, latitude, longitude });
 });
 
-app.delete('/api/footprints/:id', (req, res) => {
+app.delete('/api/footprints/:id', requireAuth, (req, res) => {
   run('DELETE FROM footprints WHERE id = ?', [req.params.id]);
   res.json({ ok: true });
 });
@@ -855,7 +874,7 @@ app.get('/api/users/:userId/settings', (req, res) => {
   res.json(s);
 });
 
-app.put('/api/users/:userId/settings', (req, res) => {
+app.put('/api/users/:userId/settings', requireAuth, (req, res) => {
   const fields = []; const values = [];
   ['blur_location', 'share_paused', 'trail_skin', 'nickname_color', 'dark_mode', 'lang'].forEach(f => {
     if (req.body[f] !== undefined) { fields.push(`${f} = ?`); values.push(req.body[f]); }
@@ -883,7 +902,7 @@ app.get('/api/users/:userId/world', (req, res) => {
 });
 
 // --- 联系人/好友 ---
-app.post('/api/contacts', (req, res) => {
+app.post('/api/contacts', requireAuth, (req, res) => {
   const { userId, contactId, type } = req.body;
   const existing = queryOne('SELECT * FROM contacts WHERE user_id = ? AND contact_id = ?', [userId, contactId]);
   if (existing) return res.json({ ok: true, already: true });
@@ -891,7 +910,7 @@ app.post('/api/contacts', (req, res) => {
   res.json({ ok: true });
 });
 
-app.delete('/api/contacts/:userId/:contactId', (req, res) => {
+app.delete('/api/contacts/:userId/:contactId', requireAuth, (req, res) => {
   run('DELETE FROM contacts WHERE user_id = ? AND contact_id = ?', [req.params.userId, req.params.contactId]);
   res.json({ ok: true });
 });
@@ -913,7 +932,7 @@ app.get('/api/eta', (req, res) => {
 
 // --- 4.2 位置分享链接（生成临时token） ---
 const _shareTokens = new Map(); // token → {userId, lat, lng, expires}
-app.post('/api/share-link', (req, res) => {
+app.post('/api/share-link', requireAuth, (req, res) => {
   const { userId, latitude, longitude, durationMinutes, trackMode } = req.body;
   if (!userId || !latitude || !longitude) return res.status(400).json({ error: '参数不完整' });
   const token = crypto.randomBytes(8).toString('hex');
@@ -1012,7 +1031,7 @@ app.get('/api/users/:userId/emergency-contacts', (req, res) => {
   res.json(contacts);
 });
 
-app.post('/api/users/:userId/emergency-contacts', (req, res) => {
+app.post('/api/users/:userId/emergency-contacts', requireAuth, (req, res) => {
   const { name, phone, relation } = req.body;
   if (!name || !phone) return res.status(400).json({ error: '姓名和电话不能为空' });
   run('INSERT INTO emergency_contacts (user_id, name, phone, relation) VALUES (?, ?, ?, ?)',
@@ -1020,7 +1039,7 @@ app.post('/api/users/:userId/emergency-contacts', (req, res) => {
   res.json({ ok: true });
 });
 
-app.delete('/api/emergency-contacts/:id', (req, res) => {
+app.delete('/api/emergency-contacts/:id', requireAuth, (req, res) => {
   run('DELETE FROM emergency_contacts WHERE id = ?', [req.params.id]);
   res.json({ ok: true });
 });
@@ -1056,11 +1075,12 @@ app.get('/api/users/:userId/heatmap', (req, res) => {
   const days = parseInt(req.query.days) || 7;
   const grid = new Map(); // key: "lat_grid,lng_grid" → {lat, lng, count}
 
+  const daysParam = Math.min(Math.max(parseInt(req.query.days) || 7, 1), 365);
   const rows = queryAll(
     `SELECT latitude, longitude FROM locations
-     WHERE user_id = ? AND recorded_at >= datetime('now', '-${days} days')
+     WHERE user_id = ? AND recorded_at >= datetime('now', '-' || ? || ' days')
        AND latitude IS NOT NULL AND longitude IS NOT NULL`,
-    [req.params.userId]
+    [req.params.userId, daysParam]
   );
 
   for (const r of rows) {
@@ -1091,11 +1111,12 @@ app.get('/api/users/:userId/heatmap', (req, res) => {
 // 4.9 驾驶行为评分 - 分析速度数据，计算安全评分
 app.get('/api/users/:userId/driving-score', (req, res) => {
   const days = parseInt(req.query.days) || 7;
+  const daysParam = Math.min(Math.max(parseInt(req.query.days) || 7, 1), 365);
   const rows = queryAll(
     `SELECT speed, recorded_at FROM locations
-     WHERE user_id = ? AND speed > 0 AND recorded_at >= datetime('now', '-${days} days')
+     WHERE user_id = ? AND speed > 0 AND recorded_at >= datetime('now', '-' || ? || ' days')
      ORDER BY recorded_at ASC`,
-    [req.params.userId]
+    [req.params.userId, daysParam]
   );
 
   if (rows.length < 5) {
@@ -1160,7 +1181,7 @@ app.get('/api/users/:userId/driving-score', (req, res) => {
 // ==================== 逆编码缓存刷新 ====================
 
 // 手动触发批量刷新（管理员API）：刷新超过30天的缓存条目
-app.post('/api/admin/refresh-geocode-cache', async (req, res) => {
+app.post('/api/admin/refresh-geocode-cache', requireAuth, async (req, res) => {
   const limit = parseInt(req.query.limit) || 500; // 每次最多刷新500条，防API超频
   // 查询过期条目（cached_at 超过30天 或 cached_at 为空）
   const expired = queryAll(
@@ -1616,6 +1637,8 @@ function getDistance(lat1, lon1, lat2, lon2) {
 
 // ==================== 启动 ====================
 initDB().then(() => {
+  // 初始化认证模块
+  initAuth(queryOne);
   cleanExpiredSessions(); // 数据库就绪后清理过期会话
   server.listen(PORT, () => {
     console.log(`\n  FamilyMap 位置共享服务已启动`);
