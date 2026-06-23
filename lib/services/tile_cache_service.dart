@@ -1,6 +1,10 @@
+import 'dart:async';
 import 'dart:io';
 import 'dart:typed_data';
+import 'dart:ui';
+
 import 'package:flutter/foundation.dart';
+import 'package:flutter/painting.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
@@ -9,12 +13,7 @@ import '../config.dart';
 class CachedTileProvider extends TileProvider {
   Directory? _cacheDir;
   final http.Client _client = http.Client();
-  int _cacheHits = 0;
-  int _cacheMisses = 0;
   bool _initialized = false;
-
-  int get cacheHits => _cacheHits;
-  int get cacheMisses => _cacheMisses;
 
   Future<void> init() async {
     if (_initialized) return;
@@ -24,12 +23,12 @@ class CachedTileProvider extends TileProvider {
   }
 
   @override
-  ImageProvider<Object> getImage(TileCoordinates coordinates, TileLayerOptions options) {
-    final z = coordinates.z;
-    final x = coordinates.x;
-    final y = coordinates.y;
+  ImageProvider getImage(TileCoordinates coordinates, TileLayer options) {
     return CachedTileImage(
-      z: z, x: x, y: y,
+      url: getTileUrl(coordinates, options),
+      z: coordinates.z,
+      x: coordinates.x,
+      y: coordinates.y,
       provider: this,
     );
   }
@@ -40,11 +39,8 @@ class CachedTileProvider extends TileProvider {
     final localFile = File(localPath);
 
     if (await localFile.exists()) {
-      _cacheHits++;
       return localFile.readAsBytes();
     }
-
-    _cacheMisses++;
 
     Uint8List? data = await _fetchFromServerCache(z, x, y);
     if (data != null) {
@@ -117,11 +113,19 @@ class CachedTileProvider extends TileProvider {
   }
 }
 
+@immutable
 class CachedTileImage extends ImageProvider<CachedTileImage> {
+  final String url;
   final int z, x, y;
   final CachedTileProvider provider;
 
-  CachedTileImage({required this.z, required this.x, required this.y, required this.provider});
+  const CachedTileImage({
+    required this.url,
+    required this.z,
+    required this.x,
+    required this.y,
+    required this.provider,
+  });
 
   @override
   Future<CachedTileImage> obtainKey(ImageConfiguration configuration) {
@@ -131,30 +135,18 @@ class CachedTileImage extends ImageProvider<CachedTileImage> {
   @override
   ImageStreamCompleter loadImage(CachedTileImage key, ImageDecoderCallback decode) {
     return MultiFrameImageStreamCompleter(
-      codec: () async {
-        final data = await provider.loadTile(key.z, key.x, key.y);
-        if (data == null) {
-          return await decode(
-            Uint8List.fromList(_transparentPixel),
-          );
-        }
-        return await decode(data);
-      }(),
+      codec: _load(key, decode),
       scale: 1.0,
     );
   }
 
-  static final _transparentPixel = Uint8List.fromList([
-    0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
-    0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
-    0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
-    0x08, 0x06, 0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4,
-    0x89, 0x00, 0x00, 0x00, 0x0A, 0x49, 0x44, 0x41,
-    0x54, 0x78, 0x9C, 0x62, 0x00, 0x00, 0x00, 0x02,
-    0x00, 0x01, 0xE5, 0x27, 0xDE, 0xFC, 0x00, 0x00,
-    0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42,
-    0x60, 0x82,
-  ]);
+  Future<Codec> _load(CachedTileImage key, ImageDecoderCallback decode) async {
+    final data = await provider.loadTile(key.z, key.x, key.y);
+    if (data != null) {
+      return ImmutableBuffer.fromUint8List(data).then(decode);
+    }
+    return ImmutableBuffer.fromUint8List(TileProvider.transparentImage).then(decode);
+  }
 
   @override
   bool operator ==(Object other) =>

@@ -18,6 +18,7 @@ import '../services/api_service.dart';
 import '../services/local_cache_service.dart';
 import '../services/gps_debug_logger.dart';
 import '../services/notification_service.dart';
+import '../services/tile_cache_service.dart';
 import '../main.dart'; // SplashScreen（force_logout 时跳转登录页）
 import '../widgets/trail_particles.dart';
 import '../widgets/member_marker.dart';
@@ -44,6 +45,7 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin, Wi
   final MapController _mapController = MapController();
   final SocketService _socketService = SocketService();
   final ApiService _apiService = apiService;
+  final CachedTileProvider _tileProvider = CachedTileProvider();
 
   List<Circle> _circles = [];
   Circle? _currentCircle;
@@ -175,6 +177,7 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin, Wi
   @override
   void initState() {
     super.initState();
+    _tileProvider.init();
     WidgetsBinding.instance.addObserver(this); // 注册生命周期观察
     _onlineMembers.add(widget.currentUser.id); // 自己在线
     _socketService.connect(widget.currentUser.id, token: widget.currentUser.token);
@@ -2069,6 +2072,7 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin, Wi
           children: [
             TileLayer(
               key: ValueKey(_isDark),
+              tileProvider: _tileProvider,
               urlTemplate: '${AppConfig.httpBaseUrl}/api/tiles/{z}/{x}/{y}',
               maxZoom: 19,
               maxNativeZoom: 18,
