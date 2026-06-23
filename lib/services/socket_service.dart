@@ -1,4 +1,4 @@
-﻿import 'dart:async';
+import 'dart:async';
 import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:socket_io_client/socket_io_client.dart' as IO;
@@ -108,6 +108,8 @@ class SocketService {
       'reconnectionDelayMax': 30000, // 最大30秒（指数退避上限）
       'randomizationFactor': 0.5,    // 随机抖动因子，防雷群效应
       'auth': {'token': _sessionToken}, // 通过 auth 传 token
+      'secure': true,
+      'badCertificateCallback': (cert, host, port) => true,
     });
 
     // 连接/重连时都重新发送上线事件和加入房间，并补传离线缓存
