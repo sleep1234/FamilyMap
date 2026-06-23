@@ -434,7 +434,9 @@ loadTexts();
             body = self.rfile.read(content_length).decode('utf-8', errors='replace')
             # URL decode
             import urllib.parse
-            text = urllib.parse.unquote_plus(body).lstrip('text=')
+            text = urllib.parse.unquote_plus(body)
+            if text.startswith('text='):
+                text = text[5:]
             if not text.strip():
                 self.send_error(400, '空文本')
                 return

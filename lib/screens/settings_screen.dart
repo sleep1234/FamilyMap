@@ -1,9 +1,12 @@
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../models/models.dart';
 import '../services/api_service.dart';
 import '../services/gps_debug_logger.dart';
+import '../widgets/avatar_widget.dart';
+import '../widgets/avatar_picker.dart';
 
 /// 设置/隐私页面
 class SettingsScreen extends StatefulWidget {
@@ -29,6 +32,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _isLoading = true;
   String _ghostMode = 'off';
   bool _gpsDebugEnabled = false; // GPS调试开关
+  String? _currentAvatarUrl; // 当前头像URL状态
 
   // 轨迹皮肤选项
   static final _trailSkins = [
@@ -37,14 +41,28 @@ class _SettingsScreenState extends State<SettingsScreen> {
     {'id': 'ice', 'name': '冰雪', 'icon': Icons.ac_unit},
     {'id': 'rainbow', 'name': '彩虹', 'icon': Icons.color_lens},
     {'id': 'galaxy', 'name': '星河', 'icon': Icons.stars},
+    {'id': 'particle', 'name': '粒子', 'icon': Icons.scatter_plot},
   ];
 
   @override
   void initState() {
     super.initState();
     _ghostMode = widget.currentUser.ghostMode;
+    _currentAvatarUrl = widget.currentUser.avatarUrl;
     _loadSettings();
     _loadGpsDebugFlag();
+    _syncAvatarFromServer(); // 从服务器获取最新头像，防止缓存过期
+  }
+
+  /// 从服务器同步最新 avatar_url，解决旧缓存导致头像回退的问题
+  Future<void> _syncAvatarFromServer() async {
+    try {
+      final user = await widget.apiService.getUser(widget.currentUser.id);
+      if (mounted && user.avatarUrl != widget.currentUser.avatarUrl) {
+        setState(() => _currentAvatarUrl = user.avatarUrl);
+        widget.currentUser.avatarUrl = user.avatarUrl;
+      }
+    } catch (_) {}
   }
 
   Future<void> _loadGpsDebugFlag() async {
@@ -55,20 +73,26 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<void> _loadSettings() async {
     try {
       final s = await widget.apiService.getUserSettings(widget.currentUser.id);
+      debugPrint('[设置] 加载成功，barkKey=${s.barkKey}, rawJson中bark_key存在=${s.barkKey.isNotEmpty}');
       setState(() {
         _settings = s;
         _isLoading = false;
       });
     } catch (e) {
+      debugPrint('[设置] 加载失败: $e');
       setState(() => _isLoading = false);
     }
   }
 
   Future<void> _updateSetting(String key, dynamic value) async {
     try {
+      debugPrint('[设置] 更新 $key = $value');
       await widget.apiService.updateUserSettings(widget.currentUser.id, {key: value});
+      debugPrint('[设置] 更新成功，重新加载');
       await _loadSettings();
+      debugPrint('[设置] 重新加载完成，barkKey=${_settings?.barkKey}');
     } catch (e) {
+      debugPrint('[设置] 更新失败: $e');
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('保存失败: $e')));
       }
@@ -95,7 +119,13 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Future<void> _toggleSleeping(bool sleeping) async {
     try {
       await widget.apiService.updateUser(widget.currentUser.id, {'is_sleeping': sleeping ? 1 : 0});
-    } catch (_) {}
+      // 同步更新本地状态，否则 SwitchListTile 的 value 不会变化
+      setState(() => widget.currentUser.isSleeping = sleeping);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('保存失败: $e')));
+      }
+    }
   }
 
   @override
@@ -109,12 +139,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 // === 个人信息 ===
                 _sectionHeader('个人信息'),
                 ListTile(
-                  leading: CircleAvatar(
-                    backgroundColor: _parseColor(widget.currentUser.avatarColor),
-                    child: Text(widget.currentUser.name[0].toUpperCase(), style: const TextStyle(color: Colors.white)),
-                  ),
+                  leading: _buildAvatar(),
                   title: Text(widget.currentUser.name),
                   subtitle: Text('ID: ${widget.currentUser.id.substring(0, 10)}...'),
+                  trailing: const Icon(Icons.camera_alt, size: 20, color: Color(0xFF94A3B8)),
+                  onTap: () => _changeAvatar(),
                 ),
 
                 // 心情
@@ -217,6 +246,24 @@ class _SettingsScreenState extends State<SettingsScreen> {
                   subtitle: const Text('SOS时自动通知的联系人'),
                   trailing: const Icon(Icons.chevron_right),
                   onTap: () => _showEmergencyContacts(),
+                ),
+
+                // Bark 推送密钥（绑定后，圈子内事件会推送到你的 iPhone）
+                ListTile(
+                  leading: const Icon(Icons.notifications_active),
+                  title: const Text('Bark 推送密钥'),
+                  subtitle: Text(
+                    _settings?.barkKey.isNotEmpty == true
+                        ? '已绑定 (${_settings!.barkKey.substring(0, 6)}...)'
+                        : '未绑定',
+                    style: TextStyle(
+                      color: _settings?.barkKey.isNotEmpty == true
+                          ? const Color(0xFF10B981)
+                          : const Color(0xFF94A3B8),
+                    ),
+                  ),
+                  trailing: const Icon(Icons.chevron_right),
+                  onTap: () => _showBarkKeyEditor(),
                 ),
 
                 // 4.8 轨迹导出
@@ -417,7 +464,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
                 ),
                 ...colors.map((c) => GestureDetector(
                   onTap: () { _updateSetting('nickname_color', c); Navigator.pop(ctx); },
-                  child: Column(children: [CircleAvatar(backgroundColor: _parseColor(c), radius: 20), const SizedBox(height: 4), Text(c, style: const TextStyle(fontSize: 10))]),
+                  child: Column(children: [CircleAvatar(backgroundColor: _parseColor(c), radius: 20), const SizedBox(height: 4), Text(c, style: const TextStyle(fontSize: 10), textScaleFactor: 1.0)]),
                 )),
               ],
             ),
@@ -431,11 +478,111 @@ class _SettingsScreenState extends State<SettingsScreen> {
   Color _parseColor(String hex) {
     try {
       hex = hex.replaceFirst('#', '');
-      if (hex.length == 3) hex = hex.split('').map((c) => '$c$c').join();
+      if (hex.length == 3) hex = hex.split('').map((c) => '$c$c').join('');
       return Color(int.parse('FF$hex', radix: 16));
     } catch (_) {
       return const Color(0xFF4F46E5);
     }
+  }
+
+  /// 构建设置页头像（支持预设 + 生肖 + 自定义图片）
+  Widget _buildAvatar() {
+    return AvatarWidget(
+      name: widget.currentUser.name,
+      avatarColor: widget.currentUser.avatarColor,
+      avatarUrl: _currentAvatarUrl,
+      size: 48,
+    );
+  }
+
+  /// 打开头像选择器
+  Future<void> _changeAvatar() async {
+    final newUrl = await showAvatarPicker(
+      context: context,
+      userId: widget.currentUser.id,
+      currentName: widget.currentUser.name,
+      currentAvatarColor: widget.currentUser.avatarColor,
+      currentAvatarUrl: _currentAvatarUrl,
+      apiService: widget.apiService,
+    );
+    if (newUrl != null && mounted) {
+      final updatedUrl = newUrl.isEmpty ? null : newUrl;
+      setState(() => _currentAvatarUrl = updatedUrl);
+      // 同步更新 currentUser，确保下次进入设置页不会回退
+      widget.currentUser.avatarUrl = updatedUrl;
+      // 更新本地缓存，防止重启APP后头像回退
+      _persistUserCache();
+    }
+  }
+
+  /// 将当前用户信息写入 SharedPreferences 缓存
+  Future<void> _persistUserCache() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('familymap_user',
+        const JsonEncoder().convert(widget.currentUser.toJson()));
+    } catch (_) {}
+  }
+
+  // ==================== Bark 推送密钥 ====================
+
+  void _showBarkKeyEditor() {
+    final controller = TextEditingController(text: _settings?.barkKey ?? '');
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      builder: (ctx) => Padding(
+        padding: EdgeInsets.only(
+          left: 20, right: 20, top: 20,
+          bottom: MediaQuery.of(ctx).viewInsets.bottom + 20,
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const Text('Bark 推送密钥', style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+            const SizedBox(height: 8),
+            const Text(
+              '在 iPhone 上安装 Bark App 后，打开 App 复制你的推送密钥粘贴到这里。\n'
+              '绑定后，圈子内的事件（SOS、围栏提醒等）会推送到你的 iPhone。',
+              style: TextStyle(fontSize: 14, color: Color(0xFF94A3B8)),
+            ),
+            const SizedBox(height: 12),
+            TextField(
+              controller: controller,
+              decoration: InputDecoration(
+                labelText: 'Bark Key',
+                hintText: '例如：XuiiXkaYgC6JhtASjAWjtS',
+                border: const OutlineInputBorder(),
+                suffixIcon: IconButton(
+                  icon: const Icon(Icons.clear, size: 18),
+                  onPressed: () => controller.clear(),
+                ),
+              ),
+            ),
+            const SizedBox(height: 16),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.end,
+              children: [
+                TextButton(
+                  onPressed: () => Navigator.pop(ctx),
+                  child: const Text('取消'),
+                ),
+                const SizedBox(width: 8),
+                ElevatedButton(
+                  onPressed: () {
+                    final key = controller.text.trim();
+                    _updateSetting('bark_key', key);
+                    Navigator.pop(ctx);
+                  },
+                  child: const Text('保存'),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   // ==================== 4.3 紧急联系人管理 ====================
@@ -579,7 +726,7 @@ class _SettingsScreenState extends State<SettingsScreen> {
   // ==================== 4.8 GPX轨迹导出 ====================
 
   Future<void> _exportMyGpx() async {
-    final url = widget.apiService.getGpxExportUrl(widget.currentUser.id);
+    final url = await widget.apiService.getGpxExportUrl(widget.currentUser.id);
     await Clipboard.setData(ClipboardData(text: url));
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(

@@ -1,13 +1,67 @@
+import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'services/api_service.dart';
+import 'services/socket_service.dart';
+import 'services/image_cache_service.dart';
 import 'models/models.dart';
 import 'screens/map_screen.dart';
 
+/// 全局 ApiService 单例
+final apiService = ApiService();
+
+/// 全局导航 Key（用于认证过期时跳回登录页）
+final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
+
+/// 认证过期/强制登出时：清除 token 并跳回登录页
+/// 使用防重入锁，避免多个并发 401 重复导航
+bool _isHandlingExpired = false;
+bool _navComplete = false;
+
+Future<void> handleAuthExpired() async {
+  if (_isHandlingExpired) return;
+  _isHandlingExpired = true;
+  _navComplete = false;
+  try {
+    debugPrint('[AuthExpired] 开始处理认证过期...');
+    apiService.clearToken();
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.remove('familymap_user');
+    SocketService.instance.disconnect();
+    final ctx = navigatorKey.currentContext;
+    if (ctx != null) {
+      await Navigator.of(ctx).pushAndRemoveUntil(
+        MaterialPageRoute(builder: (_) => SplashScreen(
+          darkMode: false,
+          onDarkModeChanged: (_) {},
+        )),
+        (route) => false,
+      );
+    }
+    _navComplete = true;
+    debugPrint('[AuthExpired] 已跳转登录页');
+  } finally {
+    // 等导航完成后才解锁
+    _isHandlingExpired = false;
+  }
+}
+
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
-  runApp(const FamilyMapApp());
+  // 初始化图片缓存服务（清理过期缓存）
+  ImageCacheService.instance.init();
+  runZonedGuarded(() {
+    runApp(const FamilyMapApp());
+  }, (error, stack) {
+    debugPrint('[Zone] uncaught error: $error');
+    if (error is AuthExpiredException) {
+      // 只在用户已登录时才处理，避免登录流程中的异常误触发
+      if (apiService.hasToken) {
+        handleAuthExpired();
+      }
+    }
+  });
 }
 
 class FamilyMapApp extends StatefulWidget {
@@ -20,9 +74,26 @@ class FamilyMapApp extends StatefulWidget {
 class _FamilyMapAppState extends State<FamilyMapApp> {
   bool _darkMode = false;
 
+  @override
+  void initState() {
+    super.initState();
+    // 启动时立即从本地缓存恢复深色模式，避免白屏闪烁
+    _loadDarkModeFromCache();
+  }
+
+  Future<void> _loadDarkModeFromCache() async {
+    final prefs = await SharedPreferences.getInstance();
+    final cached = prefs.getBool('cache_dark_mode');
+    if (cached != null && cached != _darkMode && mounted) {
+      setState(() => _darkMode = cached);
+    }
+  }
+
   // 全局暗黑模式切换器，子页面可以通过此回调通知主题变化
   void _toggleDarkMode(bool value) {
     setState(() => _darkMode = value);
+    // 同步缓存到本地
+    SharedPreferences.getInstance().then((p) => p.setBool('cache_dark_mode', value));
   }
 
   @override
@@ -35,6 +106,7 @@ class _FamilyMapAppState extends State<FamilyMapApp> {
         darkMode: _darkMode,
         onDarkModeChanged: _toggleDarkMode,
       ),
+      navigatorKey: navigatorKey,
     );
   }
 
@@ -90,6 +162,7 @@ class _SplashScreenState extends State<SplashScreen> {
       try {
         final json = _parseJson(savedUser);
         final user = AppUser.fromJson(json);
+        apiService.setToken(user.token);
         if (mounted) {
           Navigator.of(context).pushReplacement(
             MaterialPageRoute(builder: (_) => MapScreen(
@@ -146,22 +219,21 @@ class _LoginPageState extends State<LoginPage> {
 
     setState(() => _isLoading = true);
     try {
-      final api = ApiService();
       late AppUser user;
 
       if (_isLoginMode) {
-        // 登录模式
-        user = await api.loginUser(username, password);
+        user = await apiService.loginUser(username, password);
       } else {
-        // 注册模式
         final name = _nameController.text.trim();
         if (name.isEmpty) {
           _showError('请输入昵称');
           setState(() => _isLoading = false);
           return;
         }
-        user = await api.registerUser(username, password, name);
+        user = await apiService.registerUser(username, password, name);
       }
+
+      apiService.setToken(user.token);
 
       // 保存登录信息
       final prefs = await SharedPreferences.getInstance();
@@ -176,9 +248,10 @@ class _LoginPageState extends State<LoginPage> {
           )),
         );
       }
+    } on AuthExpiredException {
+      if (mounted) await handleAuthExpired();
     } catch (e) {
       if (mounted) {
-        // 提取有用的错误信息
         String msg = e.toString();
         if (msg.contains('用户名或密码错误')) {
           msg = '用户名或密码错误';
@@ -229,11 +302,13 @@ class _LoginPageState extends State<LoginPage> {
                   const Text(
                     'FamilyMap',
                     style: TextStyle(fontSize: 32, fontWeight: FontWeight.bold, color: Colors.white),
+                    textScaleFactor: 1.0,
                   ),
                   const SizedBox(height: 8),
                   const Text(
                     '与家人朋友实时共享位置',
                     style: TextStyle(fontSize: 15, color: Colors.white70),
+                    textScaleFactor: 1.0,
                   ),
                   const SizedBox(height: 32),
                   Container(

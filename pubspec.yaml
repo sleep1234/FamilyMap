@@ -31,14 +31,25 @@ dependencies:
   # UI组件
   flutter_slidable: ^3.1.1
 
+  # 分享
+  share_plus: ^10.1.4
+
   # 工具
   uuid: ^4.5.1
   intl: ^0.20.1
+  crypto: ^3.0.3
   activity_recognition_flutter: ^6.0.0
   polylabel: ^1.0.1
   path_provider: ^2.1.5
   battery_plus: ^7.0.0
   flutter_local_notifications: ^22.0.0
+  image_picker: ^1.2.2
+  record: ^7.1.0
+  audioplayers: ^6.7.1
+  # 桌面图标角标（未读消息数）
+  flutter_app_badger: ^1.5.0
+  flutter_localizations:
+    sdk: flutter
 
 dev_dependencies:
   flutter_test:

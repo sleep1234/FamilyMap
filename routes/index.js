@@ -1,0 +1,31 @@
+const usersRouter = require('./users');
+const circlesRouter = require('./circles');
+const locationsRouter = require('./locations');
+const geofencesRouter = require('./geofences');
+const sosRouter = require('./sos');
+const chatRouter = require('./chat');
+const footprintsRouter = require('./footprints');
+const contactsRouter = require('./contacts');
+const settingsRouter = require('./settings');
+const shareRouter = require('./share');
+const adminRouter = require('./admin');
+const etaRouter = require('./eta');
+const avatarsRouter = require('./avatars');
+const audioRouter = require('./audio');
+
+module.exports = function registerRoutes(app) {
+  app.use(usersRouter);
+  app.use(circlesRouter);
+  app.use(locationsRouter);
+  app.use(geofencesRouter);
+  app.use(sosRouter);
+  app.use(chatRouter);
+  app.use(footprintsRouter);
+  app.use(contactsRouter);
+  app.use(settingsRouter);
+  app.use(shareRouter);
+  app.use(adminRouter);
+  app.use(etaRouter);
+  app.use(avatarsRouter);
+  app.use(audioRouter);
+};

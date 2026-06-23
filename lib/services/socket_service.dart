@@ -1,7 +1,8 @@
-import 'dart:async';
+﻿import 'dart:async';
 import 'dart:convert';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:socket_io_client/socket_io_client.dart' as IO;
+import '../config.dart';
 import '../models/models.dart';
 
 /// Socket 服务 - 与后端 WebSocket 实时通信
@@ -18,27 +19,46 @@ class SocketService {
   bool _isDisposed = false; // 是否已释放
 
   /// 兼容旧代码的工厂构造（返回单例）
-  factory SocketService({String serverUrl = 'http://www.zhp0104.fun:8090'}) => instance;
+  factory SocketService({String? serverUrl}) => instance;
 
   IO.Socket? _socket;
-  final String serverUrl = 'http://www.zhp0104.fun:8090';
+  final String serverUrl = AppConfig.httpBaseUrl;
 
-  // 所有实时事件流
-  final _locationController = StreamController<MemberLocation>.broadcast();
-  final _onlineController = StreamController<String>.broadcast();
-  final _offlineController = StreamController<String>.broadcast();
-  final _geofenceAlertController = StreamController<Map<String, dynamic>>.broadcast();
-  final _chatMessageController = StreamController<Message>.broadcast();
-  final _sosAlertController = StreamController<SosAlert>.broadcast();
-  final _emojiBombController = StreamController<Map<String, dynamic>>.broadcast();
-  final _thinkingOfYouController = StreamController<Map<String, dynamic>>.broadcast();
-  final _aliveWarningController = StreamController<Map<String, dynamic>>.broadcast();
-  final _collisionAlertController = StreamController<Map<String, dynamic>>.broadcast();
-  final _tripReportController = StreamController<Map<String, dynamic>>.broadcast();
-  final _memberJoinedController = StreamController<Map<String, dynamic>>.broadcast();
-  final _lowBatteryController = StreamController<Map<String, dynamic>>.broadcast();
-  final _homeStatusController = StreamController<Map<String, dynamic>>.broadcast();
-  final _forceLogoutController = StreamController<Map<String, dynamic>>.broadcast();
+  // 所有实时事件流（非 final，支持重新登录时重建）
+  StreamController<MemberLocation> _locationController = StreamController<MemberLocation>.broadcast();
+  StreamController<String> _onlineController = StreamController<String>.broadcast();
+  StreamController<String> _offlineController = StreamController<String>.broadcast();
+  StreamController<Map<String, dynamic>> _geofenceAlertController = StreamController<Map<String, dynamic>>.broadcast();
+  StreamController<Message> _chatMessageController = StreamController<Message>.broadcast();
+  StreamController<SosAlert> _sosAlertController = StreamController<SosAlert>.broadcast();
+  StreamController<Map<String, dynamic>> _emojiBombController = StreamController<Map<String, dynamic>>.broadcast();
+  StreamController<Map<String, dynamic>> _thinkingOfYouController = StreamController<Map<String, dynamic>>.broadcast();
+  StreamController<Map<String, dynamic>> _aliveWarningController = StreamController<Map<String, dynamic>>.broadcast();
+  StreamController<Map<String, dynamic>> _collisionAlertController = StreamController<Map<String, dynamic>>.broadcast();
+  StreamController<Map<String, dynamic>> _tripReportController = StreamController<Map<String, dynamic>>.broadcast();
+  StreamController<Map<String, dynamic>> _memberJoinedController = StreamController<Map<String, dynamic>>.broadcast();
+  StreamController<Map<String, dynamic>> _lowBatteryController = StreamController<Map<String, dynamic>>.broadcast();
+  StreamController<Map<String, dynamic>> _homeStatusController = StreamController<Map<String, dynamic>>.broadcast();
+  StreamController<Map<String, dynamic>> _forceLogoutController = StreamController<Map<String, dynamic>>.broadcast();
+
+  /// 确保 Stream 控制器处于打开状态（重新登录后可能已被 dispose 关闭）
+  void _ensureControllersOpen() {
+    if (_locationController.isClosed) _locationController = StreamController<MemberLocation>.broadcast();
+    if (_onlineController.isClosed) _onlineController = StreamController<String>.broadcast();
+    if (_offlineController.isClosed) _offlineController = StreamController<String>.broadcast();
+    if (_geofenceAlertController.isClosed) _geofenceAlertController = StreamController<Map<String, dynamic>>.broadcast();
+    if (_chatMessageController.isClosed) _chatMessageController = StreamController<Message>.broadcast();
+    if (_sosAlertController.isClosed) _sosAlertController = StreamController<SosAlert>.broadcast();
+    if (_emojiBombController.isClosed) _emojiBombController = StreamController<Map<String, dynamic>>.broadcast();
+    if (_thinkingOfYouController.isClosed) _thinkingOfYouController = StreamController<Map<String, dynamic>>.broadcast();
+    if (_aliveWarningController.isClosed) _aliveWarningController = StreamController<Map<String, dynamic>>.broadcast();
+    if (_collisionAlertController.isClosed) _collisionAlertController = StreamController<Map<String, dynamic>>.broadcast();
+    if (_tripReportController.isClosed) _tripReportController = StreamController<Map<String, dynamic>>.broadcast();
+    if (_memberJoinedController.isClosed) _memberJoinedController = StreamController<Map<String, dynamic>>.broadcast();
+    if (_lowBatteryController.isClosed) _lowBatteryController = StreamController<Map<String, dynamic>>.broadcast();
+    if (_homeStatusController.isClosed) _homeStatusController = StreamController<Map<String, dynamic>>.broadcast();
+    if (_forceLogoutController.isClosed) _forceLogoutController = StreamController<Map<String, dynamic>>.broadcast();
+  }
 
   // 对外暴露的 Stream
   Stream<MemberLocation> get onMemberLocation => _locationController.stream;
@@ -70,7 +90,13 @@ class SocketService {
 
   /// 连接到服务器（5.3 指数退避重连），同时传 session token
   void connect(String userId, {String? token}) {
-    if (_isDisposed) return; // 已释放则不再连接
+    // 修复：重新登录时重置 _isDisposed，允许重新连接
+    _isDisposed = false;
+    // 如果 Stream 已关闭（之前调用了 dispose），需要重建控制器
+    _ensureControllersOpen();
+    // 先断开旧连接，防止 socket 泄漏和重复事件
+    _socket?.disconnect();
+    _socket = null;
     _userId = userId;
     _sessionToken = token;
     _socket = IO.io(serverUrl, <String, dynamic>{
@@ -81,16 +107,15 @@ class SocketService {
       'reconnectionDelay': 1000,     // 初始1秒
       'reconnectionDelayMax': 30000, // 最大30秒（指数退避上限）
       'randomizationFactor': 0.5,    // 随机抖动因子，防雷群效应
+      'auth': {'token': _sessionToken}, // 通过 auth 传 token
     });
 
     // 连接/重连时都重新发送上线事件和加入房间，并补传离线缓存
     _socket!.on('connect', (_) {
       _isReconnecting = false;
       if (_userId != null) {
-        // 发送上线事件时附带 session token
         _socket!.emit('user:online', {
           'userId': _userId,
-          'token': _sessionToken,
         });
         _flushOfflineBuffer(); // 重连后补传离线缓存
       }
@@ -254,8 +279,8 @@ class SocketService {
   }
 
   /// 发送"想你"互动
-  void sendThinkingOfYou({required String userId, String userName = ''}) {
-    _socket?.emit('interaction:care', {'userId': userId, 'userName': userName});
+  void sendThinkingOfYou({required String userId, String userName = '', String? targetUserId}) {
+    _socket?.emit('interaction:care', {'userId': userId, 'userName': userName, 'targetUserId': targetUserId});
   }
 
   /// 断开连接（页面级调用，只断开 Socket，不关闭 Stream）

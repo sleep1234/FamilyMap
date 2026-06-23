@@ -66,3 +66,7 @@ __pycache__/
 
 # 私有配置
 .env
+
+# SSL 证书
+ssl_cert.pem
+ssl_key.pem

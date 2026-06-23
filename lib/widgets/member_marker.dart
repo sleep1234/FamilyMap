@@ -1,6 +1,10 @@
 import 'dart:math';
 import 'package:flutter/material.dart';
+import '../config.dart';
+import '../services/image_cache_service.dart';
 import 'trail_particles.dart';
+import 'avatar_widget.dart';
+import 'ios_battery_icon.dart';
 
 /// 成员地图标记 - 家守 FamilyGuard 风格
 /// 设计规格：从上到下 = 速度标签(移动中) + 在线标签(在线) + 方形圆角头像 + 信息胶囊(停留时间|电池)
@@ -13,6 +17,7 @@ import 'trail_particles.dart';
 class MemberMarker extends StatefulWidget {
   final String name;
   final Color color;
+  final String? avatarUrl;   // 头像URL（预设key或自定义图片路径）
   final bool isMe;
   final bool isOnline;
   final bool isMoving;
@@ -29,6 +34,7 @@ class MemberMarker extends StatefulWidget {
     super.key,
     required this.name,
     required this.color,
+    this.avatarUrl,
     this.isMe = false,
     this.isOnline = true,
     this.isMoving = false,
@@ -188,17 +194,18 @@ class _MemberMarkerState extends State<MemberMarker>
         scale: tagScale,
         child: Opacity(
           opacity: _speedTagCtrl.value,
-          child: Container(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-            decoration: BoxDecoration(
-              color: tagColor.withOpacity(0.9),
-              borderRadius: BorderRadius.circular(8),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+              decoration: BoxDecoration(
+                color: tagColor.withOpacity(0.9),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Text(
+                '$speedKmh km/h',
+                style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: Colors.white),
+                textScaleFactor: 1.0, // 不跟随系统字体缩放
+              ),
             ),
-            child: Text(
-              '$speedKmh km/h',
-              style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: Colors.white),
-            ),
-          ),
         ),
       ),
     );
@@ -216,6 +223,7 @@ class _MemberMarkerState extends State<MemberMarker>
       child: const Text(
         '在线',
         style: TextStyle(fontSize: 9, fontWeight: FontWeight.w700, color: Color(0xFF2563EB)),
+        textScaleFactor: 1.0, // 不跟随系统字体缩放
       ),
     );
   }
@@ -225,8 +233,45 @@ class _MemberMarkerState extends State<MemberMarker>
     final size = 44.0;
     final radius = 12.0;
 
-    // 离线
+    final url = widget.avatarUrl;
+    final emojiPreset = PresetAvatarData.findByKey(url);
+    final zodiacPreset = ZodiacPresetData.findByKey(url);
+    // 生肖图片 or 自定义上传图片 都当网络图片处理
+    final hasNetworkImage = zodiacPreset != null || (url != null && url.isNotEmpty && !url.startsWith('preset:'));
+
+    // 获取网络图片的完整URL
+    String? imageUrl;
+    if (zodiacPreset != null) {
+      imageUrl = '${AppConfig.httpBaseUrl}${zodiacPreset.imageUrl}';
+    } else if (url != null && url.isNotEmpty && !url.startsWith('preset:')) {
+      imageUrl = url.startsWith('http') ? url : '${AppConfig.httpBaseUrl}$url';
+    }
+
+    // ---- 离线 ----
     if (!widget.isOnline) {
+      if (hasNetworkImage && imageUrl != null) {
+        return Container(
+          width: size, height: size,
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(radius),
+            border: Border.all(color: Colors.grey.shade500, width: 2),
+            image: DecorationImage(
+              image: ImageCacheService.instance.getCachedProvider(imageUrl), fit: BoxFit.cover, filterQuality: FilterQuality.medium, onError: (_, __) {},
+            ),
+          ),
+        );
+      }
+      if (emojiPreset != null) {
+        return Container(
+          width: size, height: size,
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(radius),
+            color: Colors.grey.shade600.withOpacity(0.6),
+            border: Border.all(color: Colors.grey.shade500, width: 2),
+          ),
+          child: Center(child: Text(emojiPreset.emoji, style: const TextStyle(fontSize: 22), textScaleFactor: 1.0)),
+        );
+      }
       return Container(
         width: size, height: size,
         decoration: BoxDecoration(
@@ -234,16 +279,17 @@ class _MemberMarkerState extends State<MemberMarker>
           color: Colors.grey.shade600.withOpacity(0.6),
           border: Border.all(color: Colors.grey.shade500, width: 2),
         ),
-        child: Center(
+          child: Center(
           child: Text(
             widget.name.isNotEmpty ? widget.name[0].toUpperCase() : '?',
             style: TextStyle(color: Colors.white.withOpacity(0.8), fontSize: 18, fontWeight: FontWeight.w800),
+            textScaleFactor: 1.0,
           ),
         ),
       );
     }
 
-    // 自己（蓝色粗边框 + 外发光）
+    // ---- 自己（蓝色粗边框 + 外发光）----
     if (widget.isMe) {
       final chargeGlow = widget.isCharging == true
           ? BoxShadow(
@@ -253,47 +299,65 @@ class _MemberMarkerState extends State<MemberMarker>
             )
           : const BoxShadow(color: Colors.transparent);
 
+      Widget child;
+      if (hasNetworkImage) {
+        child = const SizedBox.shrink(); // 由 DecorationImage 渲染
+      } else if (emojiPreset != null) {
+        child = Text(emojiPreset.emoji, style: const TextStyle(fontSize: 22), textScaleFactor: 1.0);
+      } else {
+        child = Text(
+          widget.name.isNotEmpty ? widget.name[0].toUpperCase() : '?',
+          style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w800),
+          textScaleFactor: 1.0,
+        );
+      }
+
       return Container(
         width: size, height: size,
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(radius),
-          color: widget.color,
+          color: hasNetworkImage ? null : widget.color,
+          image: hasNetworkImage && imageUrl != null ? DecorationImage(
+            image: ImageCacheService.instance.getCachedProvider(imageUrl), fit: BoxFit.cover, filterQuality: FilterQuality.medium, onError: (_, __) {},
+          ) : null,
           border: Border.all(color: const Color(0xFF4A90D9), width: 3),
           boxShadow: [
             BoxShadow(color: const Color(0xFF4A90D9).withOpacity(0.5), blurRadius: 10, spreadRadius: 2),
             chargeGlow,
           ],
         ),
-        child: Center(
-          child: widget.isCharging == true
-              ? _buildChargingIcon()
-              : Text(
-                  widget.name.isNotEmpty ? widget.name[0].toUpperCase() : '?',
-                  style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w800),
-                ),
-        ),
+        child: Center(child: child),
       );
     }
 
-    // 在线好友（白色细边框）
+    // ---- 在线好友（白色细边框）----
+    Widget child;
+    if (hasNetworkImage) {
+      child = const SizedBox.shrink();
+    } else if (emojiPreset != null) {
+      child = Text(emojiPreset.emoji, style: const TextStyle(fontSize: 22), textScaleFactor: 1.0);
+    } else {
+      child = Text(
+        widget.name.isNotEmpty ? widget.name[0].toUpperCase() : '?',
+        style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w800),
+        textScaleFactor: 1.0,
+      );
+    }
+
     return Container(
       width: size, height: size,
       decoration: BoxDecoration(
         borderRadius: BorderRadius.circular(radius),
-        color: widget.color,
+        color: hasNetworkImage ? null : widget.color,
+        image: hasNetworkImage && imageUrl != null ? DecorationImage(
+          image: ImageCacheService.instance.getCachedProvider(imageUrl), fit: BoxFit.cover, filterQuality: FilterQuality.medium, onError: (_, __) {},
+        ) : null,
         border: Border.all(color: Colors.white, width: 2),
         boxShadow: [
           BoxShadow(color: widget.color.withOpacity(0.4), blurRadius: 6, spreadRadius: 1),
         ],
       ),
-      child: Center(
-        child: widget.isCharging == true
-            ? _buildChargingIcon()
-            : Text(
-                widget.name.isNotEmpty ? widget.name[0].toUpperCase() : '?',
-                style: const TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.w800),
-              ),
-      ),
+      child: Center(child: child),
     );
   }
 
@@ -322,7 +386,7 @@ class _MemberMarkerState extends State<MemberMarker>
         borderRadius: BorderRadius.circular(12),
         border: Border.all(color: Colors.white12, width: 0.5),
       ),
-      constraints: const BoxConstraints(maxWidth: 120),
+      constraints: const BoxConstraints(maxWidth: 160),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
@@ -332,6 +396,7 @@ class _MemberMarkerState extends State<MemberMarker>
               child: Text(
                 stayText,
                 style: const TextStyle(color: Colors.white70, fontSize: 10, fontWeight: FontWeight.w600),
+                textScaleFactor: 1.0, // 不跟随系统字体缩放
                 overflow: TextOverflow.ellipsis,
                 maxLines: 1,
               ),
@@ -339,7 +404,7 @@ class _MemberMarkerState extends State<MemberMarker>
           // 分隔竖线（两者都有时才显示）
           if (hasBoth) ...[
             const SizedBox(width: 4),
-            Container(width: 1, height: 12, color: Colors.white24),
+            Container(width: 1, height: 10, color: Colors.white24),
             const SizedBox(width: 4),
           ],
           // 电池图标 + 百分比
@@ -361,12 +426,13 @@ class _MemberMarkerState extends State<MemberMarker>
       child: Text(
         widget.isMe ? '我' : widget.name,
         style: TextStyle(color: Colors.white.withOpacity(0.6), fontSize: 10, fontWeight: FontWeight.w400),
+        textScaleFactor: 1.0, // 不跟随系统字体缩放
         maxLines: 1, overflow: TextOverflow.ellipsis,
       ),
     );
   }
 
-  // ---- 电池指示器 ----
+  // ---- 电池指示器（iOS 风格横卧电池）----
   Widget _buildBatteryIndicator(int level, bool charging) {
     Color batteryColor;
     if (level > 50) {
@@ -377,14 +443,14 @@ class _MemberMarkerState extends State<MemberMarker>
       batteryColor = const Color(0xFFFF6B6B);
     }
 
-    final icon = charging ? Icons.bolt : Icons.battery_std;
-
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: [
-        Icon(icon, size: 14, color: charging ? const Color(0xFF34C759) : batteryColor),
+        IOSBatteryIcon(level: level, charging: charging, size: 14),
         const SizedBox(width: 1),
-        Text('$level%', style: TextStyle(color: batteryColor, fontSize: 10, fontWeight: FontWeight.w700)),
+        Text('$level%', style: TextStyle(color: batteryColor, fontSize: 10, fontWeight: FontWeight.w700),
+          textScaleFactor: 1.0, // 不跟随系统字体缩放
+        ),
       ],
     );
   }
@@ -394,17 +460,10 @@ class _MemberMarkerState extends State<MemberMarker>
   /// 视觉效果类似，但完全不触发重绘，帧率从 300/秒 降到 0
   Widget _buildOnlineRing() {
     final ringColor = widget.isMe ? const Color(0xFF4A90D9) : widget.color;
-    return CustomPaint(
-      size: const Size(62, 62),
-      painter: _StaticOnlineRingPainter(color: ringColor),
-    );
+    return _PulsingOnlineRing(color: ringColor);
   }
 
-  // ---- 充电闪电图标 ----
-  Widget _buildChargingIcon() {
-    final boltOpacity = 0.5 + 0.5 * _chargeCtrl.value;
-    return Icon(Icons.bolt, color: Colors.white.withOpacity(boltOpacity), size: 20);
-  }
+
 
   // ---- 工具方法 ----
 
@@ -464,4 +523,103 @@ class _StaticOnlineRingPainter extends CustomPainter {
 
   @override
   bool shouldRepaint(covariant _StaticOnlineRingPainter old) => old.color != color;
+}
+
+/// 脉冲呼吸灯 - 在线成员的脉冲光环动画
+class _PulsingOnlineRing extends StatefulWidget {
+  final Color color;
+  
+  const _PulsingOnlineRing({required this.color});
+  
+  @override
+  State<_PulsingOnlineRing> createState() => _PulsingOnlineRingState();
+}
+
+class _PulsingOnlineRingState extends State<_PulsingOnlineRing>
+    with SingleTickerProviderStateMixin {
+  late AnimationController _controller;
+  late Animation<double> _pulseAnimation;
+  
+  @override
+  void initState() {
+    super.initState();
+    _controller = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 2000),
+    )..repeat(reverse: true);
+    
+    _pulseAnimation = Tween<double>(begin: 0.8, end: 1.2).animate(
+      CurvedAnimation(parent: _controller, curve: Curves.easeInOut),
+    );
+  }
+  
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+  
+  @override
+  Widget build(BuildContext context) {
+    return TrailAnimatedBuilder(
+      listenable: _pulseAnimation,
+      builder: (context, child) {
+        return CustomPaint(
+          size: const Size(62, 62),
+          painter: _PulsingRingPainter(
+            color: widget.color,
+            pulseScale: _pulseAnimation.value,
+          ),
+        );
+      },
+    );
+  }
+}
+
+/// 脉冲光环绘制器
+class _PulsingRingPainter extends CustomPainter {
+  final Color color;
+  final double pulseScale;
+  
+  _PulsingRingPainter({required this.color, required this.pulseScale});
+  
+  @override
+  void paint(Canvas canvas, Size size) {
+    final center = Offset(size.width / 2, size.height / 2);
+    final baseRadius = 24.0;
+    
+    // 外层脉冲光环（呼吸效果）
+    final pulseRadius = baseRadius * pulseScale;
+    final pulsePaint = Paint()
+      ..color = color.withOpacity(0.3 * (1.2 - pulseScale))
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2.0;
+    canvas.drawCircle(center, pulseRadius, pulsePaint);
+    
+    // 内层实线光环
+    final ringPaint = Paint()
+      ..color = color.withOpacity(0.5)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2.5;
+    canvas.drawCircle(center, baseRadius, ringPaint);
+    
+    // 右上角小绿点：在线指示
+    const dotAngle = -0.785; // 右上45度
+    final dotX = center.dx + baseRadius * 0.7 * cos(dotAngle);
+    final dotY = center.dy + baseRadius * 0.7 * sin(dotAngle);
+    final dotPaint = Paint()
+      ..color = const Color(0xFF34C759)
+      ..style = PaintingStyle.fill;
+    canvas.drawCircle(Offset(dotX, dotY), 4, dotPaint);
+    // 白色细边
+    final dotBorder = Paint()
+      ..color = Colors.white
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1.5;
+    canvas.drawCircle(Offset(dotX, dotY), 4, dotBorder);
+  }
+  
+  @override
+  bool shouldRepaint(covariant _PulsingRingPainter old) => 
+      old.pulseScale != pulseScale || old.color != color;
 }

@@ -6,6 +6,10 @@
     <!-- 后台服务 -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
+    <!-- 唤醒锁：Geolocator 的 enableWakeLock=true 需要此权限，否则位置流 SecurityException 静默失败 -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- 活动识别：activity_recognition_flutter 插件需要此权限来检测步行/骑行/驾车等运动状态 -->
+    <uses-permission android:name="android.permission.ACTIVITY_RECOGNITION" />
     <!-- 网络 -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
@@ -48,6 +52,14 @@
         <intent>
             <action android:name="android.intent.action.PROCESS_TEXT"/>
             <data android:mimeType="text/plain"/>
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.SEND"/>
+            <data android:mimeType="*/*"/>
+        </intent>
+        <intent>
+            <action android:name="android.intent.action.SENDTO"/>
+            <data android:scheme="mailto"/>
         </intent>
     </queries>
 </manifest>

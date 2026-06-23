@@ -6,8 +6,9 @@ class AppUser {
   final String id;
   final String name;
   final String avatarColor;
+  String? avatarUrl;    // 自定义头像URL or 预设头像路径（可变，设置页修改后直接更新）
   final String? mood;       // 心情文字
-  final bool isSleeping;    // 睡眠状态
+  bool isSleeping;    // 睡眠状态（设置页需要可变，以便SwitchListTile刷新）
   final String ghostMode;   // off / invisible / blur
   final String? username;   // 登录用户名
   final String? token;      // 会话 token（多设备互踢用）
@@ -17,6 +18,7 @@ class AppUser {
     required this.id,
     required this.name,
     this.avatarColor = '#4F46E5',
+    this.avatarUrl,
     this.mood,
     this.isSleeping = false,
     this.ghostMode = 'off',
@@ -29,13 +31,14 @@ class AppUser {
         id: json['id'],
         name: json['name'],
         avatarColor: json['avatar_color'] ?? '#4F46E5',
+        avatarUrl: json['avatar_url'],
         mood: json['mood'],
         isSleeping: (json['is_sleeping'] ?? 0) == 1,
         ghostMode: json['ghost_mode'] ?? 'off',
         username: json['username'],
         token: json['token'],
         createdAt: json['created_at'] != null
-            ? DateTime.tryParse(json['created_at'])
+            ? Stay.parseUtcToLocal(json['created_at'])
             : null,
       );
 
@@ -43,6 +46,7 @@ class AppUser {
         'id': id,
         'name': name,
         'avatar_color': avatarColor,
+        'avatar_url': avatarUrl,
         'mood': mood,
         'is_sleeping': isSleeping ? 1 : 0,
         'ghost_mode': ghostMode,
@@ -66,6 +70,7 @@ class MemberLocation {
   final String? stayAddress;  // 当前停留地址
   final int? stayMinutes;     // 当前停留时长（分钟）
   final DateTime? stayStartedAt; // 停留开始时间，用于前端实时计算
+  final String? trailSkin;    // 拖尾皮肤
 
   MemberLocation({
     required this.userId,
@@ -81,6 +86,7 @@ class MemberLocation {
     this.stayAddress,
     this.stayMinutes,
     this.stayStartedAt,
+    this.trailSkin,
   });
 
   factory MemberLocation.fromJson(Map<String, dynamic> json) => MemberLocation(
@@ -102,7 +108,7 @@ class MemberLocation {
             : null,
         address: json['address'],
         recordedAt: json['recorded_at'] != null
-            ? DateTime.tryParse(json['recorded_at'])
+            ? Stay.parseUtcToLocal(json['recorded_at'])
             : json['timestamp'] != null
                 ? DateTime.fromMillisecondsSinceEpoch(json['timestamp'])
                 : null,
@@ -112,8 +118,9 @@ class MemberLocation {
             ? (json['stay_minutes'] as num).toInt()
             : null,
         stayStartedAt: json['stay_started_at'] != null
-            ? DateTime.tryParse(json['stay_started_at'])
+            ? Stay.parseUtcToLocal(json['stay_started_at'])
             : null,
+        trailSkin: json['trailSkin'] ?? json['trail_skin'],
       );
 }
 
@@ -137,6 +144,13 @@ class Circle {
         inviteCode: json['invite_code'] ?? '',
         memberCount: json['member_count'] ?? 1,
       );
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'name': name,
+        'invite_code': inviteCode,
+        'member_count': memberCount,
+      };
 }
 
 /// 地理围栏
@@ -165,6 +179,15 @@ class Geofence {
         longitude: (json['longitude'] as num).toDouble(),
         radius: (json['radius'] as num).toInt(),
       );
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'circle_id': circleId,
+        'name': name,
+        'latitude': latitude,
+        'longitude': longitude,
+        'radius': radius,
+      };
 }
 
 /// 停留记录
@@ -195,27 +218,40 @@ class Stay {
         latitude: (json['latitude'] as num).toDouble(),
         longitude: (json['longitude'] as num).toDouble(),
         address: json['address'],
+        // 服务器存的是 UTC 时间但无 Z 后缀，补 Z 后按 UTC 解析再转本地时间
         startedAt: json['started_at'] != null
-            ? DateTime.tryParse(json['started_at'])
+            ? Stay.parseUtcToLocal(json['started_at'])
             : null,
         endedAt: json['ended_at'] != null
-            ? DateTime.tryParse(json['ended_at'])
+            ? Stay.parseUtcToLocal(json['ended_at'])
             : null,
         durationMinutes: json['duration_minutes'] != null
             ? (json['duration_minutes'] as num).toInt()
             : null,
       );
 
-  /// 格式化停留时长
+  /// 解析服务器返回的 UTC 时间字符串（无 Z 后缀）为本地 DateTime
+  static DateTime? parseUtcToLocal(String? s) {
+    if (s == null) return null;
+    // 如果已有 Z 或 +08:00 后缀，直接解析
+    if (s.endsWith('Z') || s.contains('+')) return DateTime.tryParse(s)?.toLocal();
+    // 否则当作 UTC 解析后转本地
+    return DateTime.tryParse('${s}Z')?.toLocal();
+  }
+
+  /// 格式化停留时长：xx天xx时xx分（与地图标记格式一致）
   String get durationText {
     final mins = durationMinutes ?? 0;
-    if (mins < 60) return '$mins分钟';
-    final h = mins ~/ 60;
+    if (mins <= 0) return '0分';
+    final d = mins ~/ (24 * 60);
+    final h = (mins % (24 * 60)) ~/ 60;
     final m = mins % 60;
-    if (h < 24) return '${h}小时${m > 0 ? '${m}分' : ''}';
-    final d = h ~/ 24;
-    final rh = h % 24;
-    return '${d}天${rh > 0 ? '${rh}小时' : ''}';
+    final parts = <String>[];
+    if (d > 0) parts.add('${d}天');
+    if (h > 0) parts.add('${h}时');
+    if (m > 0) parts.add('${m}分');
+    if (parts.isEmpty) parts.add('${mins}分');
+    return parts.join('');
   }
 }
 
@@ -228,6 +264,7 @@ class Message {
   final String content;
   final String? userName;
   final String? avatarColor;
+  final String? avatarUrl;
   final DateTime? createdAt;
 
   Message({
@@ -238,6 +275,7 @@ class Message {
     required this.content,
     this.userName,
     this.avatarColor,
+    this.avatarUrl,
     this.createdAt,
   });
 
@@ -249,8 +287,9 @@ class Message {
         content: json['content'] ?? '',
         userName: json['name'],
         avatarColor: json['avatar_color'],
+        avatarUrl: json['avatar_url'],
         createdAt: json['created_at'] != null
-            ? DateTime.tryParse(json['created_at'])
+            ? Stay.parseUtcToLocal(json['created_at'])
             : null,
       );
 }
@@ -283,7 +322,7 @@ class SosAlert {
         address: json['address'],
         status: json['status'] ?? 'active',
         createdAt: json['created_at'] != null
-            ? DateTime.tryParse(json['created_at'])
+            ? Stay.parseUtcToLocal(json['created_at'])
             : json['timestamp'] != null
                 ? DateTime.fromMillisecondsSinceEpoch(json['timestamp'])
                 : null,
@@ -298,6 +337,7 @@ class Footprint {
   final double latitude;
   final double longitude;
   final String category;    // home / work / school / food / fun / other
+  final String note;        // 备注
   final DateTime? createdAt;
 
   Footprint({
@@ -307,6 +347,7 @@ class Footprint {
     required this.latitude,
     required this.longitude,
     this.category = 'other',
+    this.note = '',
     this.createdAt,
   });
 
@@ -317,8 +358,9 @@ class Footprint {
         latitude: (json['latitude'] as num).toDouble(),
         longitude: (json['longitude'] as num).toDouble(),
         category: json['category'] ?? 'other',
+        note: json['note'] ?? '',
         createdAt: json['created_at'] != null
-            ? DateTime.tryParse(json['created_at'])
+            ? Stay.parseUtcToLocal(json['created_at'])
             : null,
       );
 }
@@ -332,6 +374,7 @@ class UserSettings {
   final String nicknameColor;   // 空字符串=默认颜色, 否则为hex色值
   final bool darkMode;
   final String lang;            // zh / en
+  final String barkKey;         // Bark 推送密钥
 
   UserSettings({
     required this.userId,
@@ -341,6 +384,7 @@ class UserSettings {
     this.nicknameColor = '',
     this.darkMode = false,
     this.lang = 'zh',
+    this.barkKey = '',
   });
 
   factory UserSettings.fromJson(Map<String, dynamic> json) => UserSettings(
@@ -351,6 +395,7 @@ class UserSettings {
         nicknameColor: json['nickname_color'] ?? '',
         darkMode: (json['dark_mode'] ?? 0) == 1,
         lang: json['lang'] ?? 'zh',
+        barkKey: json['bark_key'] ?? '',
       );
 
   Map<String, dynamic> toJson() => {
@@ -360,6 +405,7 @@ class UserSettings {
         'nickname_color': nicknameColor,
         'dark_mode': darkMode ? 1 : 0,
         'lang': lang,
+        'bark_key': barkKey,
       };
 }
 
@@ -371,6 +417,7 @@ class Contact {
   final String type;      // friend / family
   final String? name;
   final String? avatarColor;
+  final String? avatarUrl;
 
   Contact({
     this.id,
@@ -379,6 +426,7 @@ class Contact {
     this.type = 'friend',
     this.name,
     this.avatarColor,
+    this.avatarUrl,
   });
 
   factory Contact.fromJson(Map<String, dynamic> json) => Contact(
@@ -388,6 +436,18 @@ class Contact {
         type: json['type'] ?? 'friend',
         name: json['name'],
         avatarColor: json['avatar_color'],
+        avatarUrl: json['avatar_url'],
+      );
+}
+
+/// 世界迷雾网格点
+class FogGrid {
+  final double lat;
+  final double lng;
+  FogGrid({required this.lat, required this.lng});
+  factory FogGrid.fromJson(Map<String, dynamic> json) => FogGrid(
+        lat: (json['lat'] as num).toDouble(),
+        lng: (json['lng'] as num).toDouble(),
       );
 }
 
@@ -396,16 +456,19 @@ class WorldStats {
   final int gridCount;
   final List<String> cities;
   final int cityCount;
+  final List<FogGrid> grids; // 网格坐标，供迷雾遮罩绘制
 
   WorldStats({
     this.gridCount = 0,
     this.cities = const [],
     this.cityCount = 0,
+    this.grids = const [],
   });
 
   factory WorldStats.fromJson(Map<String, dynamic> json) => WorldStats(
         gridCount: json['gridCount'] ?? 0,
         cities: List<String>.from(json['cities'] ?? []),
         cityCount: json['cityCount'] ?? 0,
+        grids: (json['grids'] as List?)?.map((g) => FogGrid.fromJson(g as Map<String, dynamic>)).toList() ?? [],
       );
 }
