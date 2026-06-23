@@ -867,7 +867,7 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin, Wi
         intervalDuration: const Duration(seconds: 1),
       );
     } else {
-      // iOS: 使用 AppleSettings 开启后台定位
+        // iOS: 使用 AppleSettings 开启后台定位
       locationSettings = AppleSettings(
         accuracy: LocationAccuracy.high,
         distanceFilter: 0,
@@ -875,9 +875,9 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin, Wi
         allowBackgroundLocationUpdates: true,
         // 不自动暂停位置更新（锁屏后继续追踪）
         pauseLocationUpdatesAutomatically: false,
-        // 显示后台定位指示器（蓝色横条/蓝色箭头），让用户知道App在追踪
-        showBackgroundLocationIndicator: true,
-        activityType: ActivityType.automotiveNavigation,
+        // 隐藏灵动岛蓝色箭头指示器（隐私敏感场景可设为 true）
+        showBackgroundLocationIndicator: false,
+        activityType: ActivityType.other,
       );
     }
 
