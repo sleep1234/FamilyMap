@@ -15,6 +15,9 @@
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <!-- 开机启动 -->
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <!-- 定时保活 -->
+    <uses-permission android:name="android.permission.SCHEDULE_EXACT_ALARM" />
+    <uses-permission android:name="android.permission.USE_EXACT_ALARM" />
     <!-- 震动 -->
     <uses-permission android:name="android.permission.VIBRATE" />
     <!-- 通知权限（Android 13+ 必须声明） -->
@@ -55,6 +58,7 @@
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
                 <action android:name="android.intent.action.QUICKBOOT_POWERON" />
+                <action android:name="com.familymap.familymap.KEEP_ALIVE" />
             </intent-filter>
         </receiver>
     </application>
