@@ -12,6 +12,7 @@ const adminRouter = require('./admin');
 const etaRouter = require('./eta');
 const avatarsRouter = require('./avatars');
 const audioRouter = require('./audio');
+const tilesRouter = require('./tiles');
 
 module.exports = function registerRoutes(app) {
   app.use(usersRouter);
@@ -28,4 +29,5 @@ module.exports = function registerRoutes(app) {
   app.use(etaRouter);
   app.use(avatarsRouter);
   app.use(audioRouter);
+  app.use(tilesRouter);
 };
