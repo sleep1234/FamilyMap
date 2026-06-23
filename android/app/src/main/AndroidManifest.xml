@@ -58,9 +58,13 @@
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
                 <action android:name="android.intent.action.QUICKBOOT_POWERON" />
-                <action android:name="com.familymap.familymap.KEEP_ALIVE" />
             </intent-filter>
         </receiver>
+        <!-- 后台保活服务 -->
+        <service
+            android:name=".KeepAliveService"
+            android:exported="false"
+            android:foregroundServiceType="location" />
     </application>
     <queries>
         <intent>
