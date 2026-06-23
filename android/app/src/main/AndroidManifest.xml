@@ -47,6 +47,16 @@
         <meta-data
             android:name="flutterEmbedding"
             android:value="2" />
+        <!-- 开机自启接收器 -->
+        <receiver
+            android:name=".BootReceiver"
+            android:exported="true"
+            android:enabled="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.QUICKBOOT_POWERON" />
+            </intent-filter>
+        </receiver>
     </application>
     <queries>
         <intent>
