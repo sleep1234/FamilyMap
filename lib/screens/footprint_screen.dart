@@ -6,6 +6,7 @@ import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
 import '../models/models.dart';
 import '../services/api_service.dart';
+import '../config.dart';
 
 const _amapKey = String.fromEnvironment('AMAP_KEY', defaultValue: '');
 
@@ -405,8 +406,7 @@ class _FootprintScreenState extends State<FootprintScreen> {
               ),
               children: [
                 TileLayer(
-                  urlTemplate: 'https://webrd0{s}.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}',
-                  subdomains: const ['1', '2', '3', '4'],
+                  urlTemplate: '${AppConfig.httpBaseUrl}/api/tiles/{z}/{x}/{y}',
                   maxZoom: 18,
                 ),
                 MarkerLayer(

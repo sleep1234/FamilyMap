@@ -18,7 +18,6 @@ import '../services/api_service.dart';
 import '../services/local_cache_service.dart';
 import '../services/gps_debug_logger.dart';
 import '../services/notification_service.dart';
-import '../services/tile_cache_service.dart';
 import '../main.dart'; // SplashScreen（force_logout 时跳转登录页）
 import '../widgets/trail_particles.dart';
 import '../widgets/member_marker.dart';
@@ -45,7 +44,6 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin, Wi
   final MapController _mapController = MapController();
   final SocketService _socketService = SocketService();
   final ApiService _apiService = apiService;
-  final CachedTileProvider _tileProvider = CachedTileProvider();
 
   List<Circle> _circles = [];
   Circle? _currentCircle;
@@ -177,7 +175,6 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin, Wi
   @override
   void initState() {
     super.initState();
-    _initTileProvider();
     WidgetsBinding.instance.addObserver(this); // 注册生命周期观察
     _onlineMembers.add(widget.currentUser.id); // 自己在线
     _socketService.connect(widget.currentUser.id, token: widget.currentUser.token);
@@ -194,10 +191,6 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin, Wi
     _requestLocationAndInit();
     // 启动位置插值定时器（30fps），让成员标记平滑移动
     _startInterpolationTimer();
-  }
-
-  void _initTileProvider() {
-    _tileProvider.init();
   }
 
   /// 按优先级顺序请求权限并初始化：通知(前台服务必需) → 位置 → 电池 → 活动识别
@@ -2076,11 +2069,7 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin, Wi
           children: [
             TileLayer(
               key: ValueKey(_isDark),
-              tileProvider: _tileProvider,
-              urlTemplate: _isDark
-                  ? 'https://wprd0{s}.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=2&style=7&x={x}&y={y}&z={z}'
-                  : 'https://webrd0{s}.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=2&style=8&x={x}&y={y}&z={z}',
-              subdomains: const ['1', '2', '3', '4'],
+              urlTemplate: '${AppConfig.httpBaseUrl}/api/tiles/{z}/{x}/{y}',
               maxZoom: 19,
               maxNativeZoom: 18,
               minNativeZoom: 3,

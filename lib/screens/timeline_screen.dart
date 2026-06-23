@@ -1,9 +1,10 @@
-﻿import 'dart:math';
+import 'dart:math';
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart' hide Circle;
 import '../models/models.dart';
 import '../services/api_service.dart';
+import '../config.dart';
 
 /// 时间线页面 - 查看某天的行程记录（地图为主 + 底部可拖拽时间线面板）
 class TimelineScreen extends StatefulWidget {
@@ -187,8 +188,7 @@ class _TimelineScreenState extends State<TimelineScreen> {
               ),
               children: [
                 TileLayer(
-                  urlTemplate: 'https://webrd0{s}.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}',
-                  subdomains: const ['1', '2', '3', '4'],
+                  urlTemplate: '${AppConfig.httpBaseUrl}/api/tiles/{z}/{x}/{y}',
                   maxZoom: 18,
                 ),
                 // 轨迹线
