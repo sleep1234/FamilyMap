@@ -8,7 +8,6 @@ import 'package:flutter/painting.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
-import '../config.dart';
 
 class CachedTileProvider extends TileProvider {
   Directory? _cacheDir;
@@ -42,31 +41,11 @@ class CachedTileProvider extends TileProvider {
       return localFile.readAsBytes();
     }
 
-    Uint8List? data = await _fetchFromServerCache(z, x, y);
-    if (data != null) {
-      await _saveToLocal(localPath, data);
-      return data;
-    }
-
-    data = await _fetchFromOrigin(z, x, y);
+    final data = await _fetchFromOrigin(z, x, y);
     if (data != null) {
       await _saveToLocal(localPath, data);
     }
     return data;
-  }
-
-  Future<Uint8List?> _fetchFromServerCache(int z, int x, int y) async {
-    try {
-      final url = '${AppConfig.httpBaseUrl}/api/tiles/$z/$x/$y';
-      final resp = await _client.get(
-        Uri.parse(url),
-        headers: {'Accept': 'image/png'},
-      ).timeout(const Duration(seconds: 5));
-      if (resp.statusCode == 200 && resp.bodyBytes.length > 100) {
-        return resp.bodyBytes;
-      }
-    } catch (_) {}
-    return null;
   }
 
   Future<Uint8List?> _fetchFromOrigin(int z, int x, int y) async {

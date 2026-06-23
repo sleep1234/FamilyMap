@@ -2073,7 +2073,8 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin, Wi
             TileLayer(
               key: ValueKey(_isDark),
               tileProvider: _tileProvider,
-              urlTemplate: '${AppConfig.httpBaseUrl}/api/tiles/{z}/{x}/{y}',
+              urlTemplate: 'https://webrd0{s}.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}',
+              subdomains: const ['1', '2', '3', '4'],
               maxZoom: 19,
               maxNativeZoom: 18,
               minNativeZoom: 3,
