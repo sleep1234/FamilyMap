@@ -22,7 +22,7 @@ router.post('/api/share-link', requireAuth, validateBody(schemas.shareLink), (re
   if (!latitude || !longitude) return res.status(400).json({ error: '参数不完整' });
   const result = createShareToken(userId, latitude, longitude, durationMinutes, trackMode);
   const proto = req.protocol || 'http';
-  const host = req.get('host') || `www.zhp0104.fun:${config.PORT}`;
+  const host = req.get('host') || `www.zhp98.fun`;
   res.json({
     token: result.token,
     url: `${proto}://${host}/share/${result.token}`,

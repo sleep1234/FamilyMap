@@ -6,7 +6,7 @@ class AppConfig {
   // ==================== 服务器配置 ====================
   
   /// 服务器域名（不带协议和端口）
-  static const String serverHost = 'www.zhp0104.fun';
+  static const String serverHost = 'www.zhp98.fun';
   
   /// HTTP 端口
   static const int httpPort = 8090;
