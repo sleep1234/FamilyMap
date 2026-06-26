@@ -15,10 +15,19 @@ subprojects {
     val newSubprojectBuildDir: Directory = newBuildDir.dir(project.name)
     project.layout.buildDirectory.value(newSubprojectBuildDir)
     
-    // 强制子项目使用 compileSdk 36（解决 vibration/old plugins 兼容问题）
     afterEvaluate {
         extensions.findByType<com.android.build.gradle.LibraryExtension>()?.let {
             it.compileSdkVersion(36)
+            if (it.namespace.isNullOrEmpty()) {
+                val manifestFile = project.file("src/main/AndroidManifest.xml")
+                if (manifestFile.exists()) {
+                    val content = manifestFile.readText()
+                    val match = Regex("""package\s*=\s*"([^"]+)"""").find(content)
+                    if (match != null) {
+                        it.namespace = match.groupValues[1]
+                    }
+                }
+            }
         }
     }
 }
