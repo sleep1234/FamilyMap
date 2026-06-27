@@ -8,7 +8,6 @@ const http = require('http');
 const { queryAll, queryOne } = require('../db');
 
 const BARK_BASE = 'https://api.day.app';
-const BARK_ICON = 'https://raw.githubusercontent.com/sleep1234/FamilyMap/75c109d7b009453ab70e3de451cd0b7ffc14712e/public/app_icon.png';
 
 /**
  * HTTP POST 请求（Bark 推荐方式，支持更多参数）
@@ -92,7 +91,6 @@ async function sendBarkToUsers(targetUserIds, title, body, options = {}) {
         device_key: barkKey,
         title,
         body,
-        icon: options.icon || BARK_ICON,
         group: options.group || 'familymap',
       };
       if (options.sound) payload.sound = options.sound;
