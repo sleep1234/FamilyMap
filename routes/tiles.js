@@ -4,6 +4,16 @@ const fs = require('fs');
 const path = require('path');
 const https = require('https');
 const http = require('http');
+const rateLimit = require('express-rate-limit');
+const config = require('../config');
+
+const tileLimiter = rateLimit({
+  windowMs: config.RATE_LIMIT_WINDOW_MS,
+  max: 200,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: '瓦片请求过于频繁' },
+});
 
 const TILE_CACHE_DIR = path.join(__dirname, '..', 'tiles_cache');
 
@@ -54,7 +64,7 @@ function fetchTile(z, x, y) {
   return promise;
 }
 
-router.get('/api/tiles/:z/:x/:y', (req, res) => {
+router.get('/api/tiles/:z/:x/:y', tileLimiter, (req, res) => {
   const z = parseInt(req.params.z);
   const x = parseInt(req.params.x);
   const y = parseInt(req.params.y);

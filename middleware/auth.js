@@ -33,7 +33,10 @@ const ADMIN_USER_IDS = (process.env.ADMIN_USER_IDS || '').split(',').filter(Bool
 
 function requireAdmin(req, res, next) {
   if (!req.userId) return res.status(401).json({ error: '未登录' });
-  if (ADMIN_USER_IDS.length > 0 && !ADMIN_USER_IDS.includes(req.userId)) {
+  if (ADMIN_USER_IDS.length === 0) {
+    return res.status(403).json({ error: '管理员未配置' });
+  }
+  if (!ADMIN_USER_IDS.includes(req.userId)) {
     return res.status(403).json({ error: '无管理员权限' });
   }
   next();

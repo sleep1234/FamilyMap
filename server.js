@@ -7,7 +7,7 @@ const path = require('path');
 const rateLimit = require('express-rate-limit');
 const config = require('./config');
 const db = require('./db');
-const { initAuth } = require('./middleware/auth');
+const { initAuth, optionalAuth } = require('./middleware/auth');
 const registerRoutes = require('./routes/index');
 const { registerSocketHandlers, checkAlive, startAliveCheck } = require('./socket/handler');
 const { checkGeocodeRefreshSchedule } = require('./services/geocode');
@@ -44,7 +44,7 @@ app.use((req, res, next) => {
   res.set('X-XSS-Protection', '1; mode=block');
   res.set('Referrer-Policy', 'strict-origin-when-cross-origin');
   res.set('Content-Security-Policy',
-    "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://webapi.amap.com https://restapi.amap.com https://unpkg.com; img-src 'self' data: https://*.is.autonavi.com https://*.tile.openstreetmap.org; style-src 'self' 'unsafe-inline' https://unpkg.com; connect-src 'self' https://restapi.amap.com wss: ws: https:");
+    "default-src 'self'; script-src 'self' 'unsafe-inline' https://webapi.amap.com https://restapi.amap.com https://unpkg.com; img-src 'self' data: https://*.is.autonavi.com; style-src 'self' 'unsafe-inline' https://unpkg.com; connect-src 'self' wss://www.zhp98.fun https://restapi.amap.com");
   next();
 });
 
@@ -77,7 +77,14 @@ const locationLimiter = rateLimit({
 app.use('/api/users/:userId/locations', locationLimiter);
 
 app.use(express.static(path.join(__dirname, 'public')));
-app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+// uploads 需要认证访问（头像和音频文件）
+app.use('/uploads', optionalAuth, (req, res, next) => {
+  // 允许预设头像（/uploads/presets/）公开访问
+  if (req.path.startsWith('/presets/')) return next();
+  // 其他文件需要认证
+  if (!req.userId) return res.status(401).json({ error: '未登录' });
+  next();
+}, express.static(path.join(__dirname, 'uploads')));
 app.use(express.json({ limit: '10mb' }));
 
 registerRoutes(app);

@@ -54,8 +54,9 @@ router.get('/api/users/:userId/track', requireAuth, requireUserAccess, (req, res
   res.json(points);
 });
 
-// 临时 GPX 下载 token 存储（内存，5分钟过期）
+// 临时 GPX 下载 token 存储（内存，5分钟过期，最大100个）
 const _gpxTokens = new Map();
+const GPX_TOKEN_MAX = 100;
 
 router.post('/api/gpx-token', requireAuth, (req, res) => {
   const token = crypto.randomBytes(16).toString('hex');
@@ -63,6 +64,11 @@ router.post('/api/gpx-token', requireAuth, (req, res) => {
   // 清理过期 token
   for (const [k, v] of _gpxTokens) {
     if (Date.now() - v.createdAt > 300000) _gpxTokens.delete(k);
+  }
+  // 限制 token 数量
+  if (_gpxTokens.size > GPX_TOKEN_MAX) {
+    const oldest = _gpxTokens.keys().next().value;
+    _gpxTokens.delete(oldest);
   }
   res.json({ token, expiresIn: 300 });
 });

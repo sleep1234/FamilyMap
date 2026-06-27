@@ -1,5 +1,6 @@
 const express = require('express');
 const router = express.Router();
+const crypto = require('crypto');
 const { queryOne, queryAll, run } = require('../db');
 const { requireAuth, requireUserAccess, requireCircleMember } = require('../middleware/auth');
 const { validateBody, schemas } = require('../middleware/validate');
@@ -10,7 +11,7 @@ router.post('/api/circles', requireAuth, validateBody(schemas.createCircle), (re
   const { name } = req.body;
   if (!name) return res.status(400).json({ error: '圈子名称不能为空' });
   const id = 'c_' + Date.now().toString(36) + Math.random().toString(36).substr(2, 5);
-  const invite_code = Math.random().toString(36).substr(2, 6).toUpperCase();
+  const invite_code = crypto.randomBytes(4).toString('hex').toUpperCase().slice(0, 8);
   run('INSERT INTO circles (id, name, invite_code) VALUES (?, ?, ?)', [id, name, invite_code]);
   run('INSERT INTO circle_members (circle_id, user_id) VALUES (?, ?)', [id, userId]);
   res.json({ id, name, invite_code });

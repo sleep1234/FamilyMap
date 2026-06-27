@@ -238,6 +238,9 @@ function verifySession(token) {
   if (!token) return null;
   const session = queryOne('SELECT user_id FROM sessions WHERE token = ?', [token]);
   if (!session) return null;
+  // 会话超过7天强制过期（即使持续活跃）
+  const maxAge = queryOne("SELECT created_at FROM sessions WHERE token = ? AND created_at < datetime('now', '-7 days')", [token]);
+  if (maxAge) { run('DELETE FROM sessions WHERE token = ?', [token]); return null; }
   run("UPDATE sessions SET last_active = datetime('now') WHERE token = ?", [token]);
   return session.user_id;
 }

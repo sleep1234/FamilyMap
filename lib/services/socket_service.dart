@@ -109,7 +109,9 @@ class SocketService {
       'randomizationFactor': 0.5,    // 随机抖动因子，防雷群效应
       'auth': {'token': _sessionToken}, // 通过 auth 传 token
       'secure': true,
-      'badCertificateCallback': (cert, host, port) => true,
+      'badCertificateCallback': (cert, host, port) {
+        return host == AppConfig.serverHost;
+      },
     });
 
     // 连接/重连时都重新发送上线事件和加入房间，并补传离线缓存

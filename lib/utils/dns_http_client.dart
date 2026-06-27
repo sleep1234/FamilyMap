@@ -9,7 +9,9 @@ class DnsHttpClient {
   /// 创建支持自定义 DNS 的 HTTP 客户端
   static Future<http.Client> create() async {
     final ioHttpClient = HttpClient()
-      ..badCertificateCallback = (cert, host, port) => true;
+      ..badCertificateCallback = (cert, host, port) {
+        return host == 'www.zhp98.fun';
+      };
     return IOClient(ioHttpClient);
   }
   

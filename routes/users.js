@@ -77,11 +77,6 @@ router.post('/api/login', validateBody(schemas.login), async (req, res) => {
   });
 });
 
-router.post('/api/users', validateBody(legacyRegisterSchema), (req, res) => {
-  // 安全修复：禁用无密码注册，防止任意创建账号
-  return res.status(403).json({ error: '该注册方式已停用，请使用 /api/register' });
-});
-
 router.get('/api/users/:userId', requireAuth, requireUserAccess, (req, res) => {
   const user = queryOne('SELECT * FROM users WHERE id = ?', [req.params.userId]);
   if (!user) return res.status(404).json({ error: '用户不存在' });

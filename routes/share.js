@@ -73,7 +73,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC',sans-
 <div class="info-bar" id="info">加载地图中...</div>
 <div class="expired" id="expired">链接已过期，请向分享者索要新的链接</div>
 <script>
-var lat0=${gcjCoords.lat},lng0=${gcjCoords.lng},token="${req.params.token}",trackMode=${data.trackMode ? 'true' : 'false'},expiresAt=${data.expires};
+var lat0=${gcjCoords.lat},lng0=${gcjCoords.lng},token=${JSON.stringify(req.params.token)},trackMode=${data.trackMode ? 'true' : 'false'},expiresAt=${data.expires};
 var userName='${escapeHtml(user?.name) || '家人'}',userColor='${user?.avatar_color || '#3b82f6'}';
 var map=L.map('map',{zoomControl:false,attributionControl:false}).setView([lat0,lng0],16);
 L.control.zoom({position:'topright'}).addTo(map);

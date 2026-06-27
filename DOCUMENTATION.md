@@ -239,7 +239,7 @@ SOS、围栏进入/离开、低电量、碰撞、未活跃、到家/离家、停
 
 ```dart
 class AppConfig {
-  static const String serverHost = 'www.zhp0104.fun';
+  static const String serverHost = 'www.zhp98.fun';
   static const int httpPort = 8090;
   static const bool useHttps = false;
   static const String? customDns = '223.5.5.5';
@@ -303,7 +303,7 @@ class AppConfig {
 ## 六、部署与运维
 
 ### 服务器信息
-- **地址**：www.zhp0104.fun
+- **地址**：www.zhp98.fun
 - **SSH**：端口 22，root 用户
 - **项目路径**：/vol1/1000/9自己的软件项目/家庭位置共享/
 - **API 端口**：8090
@@ -312,13 +312,12 @@ class AppConfig {
 - **APK 下载**：http://192.168.31.234:2121/（本地调试服务器）
 
 ### 部署流程
-1. 修改代码 → 本地 `flutter build apk --debug`
+1. 修改代码 → 推送 GitHub（Actions 自动构建 APK/IPA）
 2. 上传 APK：paramiko → `/vol1/1000/app-debug.apk`
-3. 推送 GitHub：`python .temp/push_to_github.py`
-4. 重启服务器：paramiko → kill + nohup node server.js
+3. 重启服务器：paramiko → kill + nohup node server.js
 
 ### 高德 API Key
-- Web服务：`a80218fd754f53e944a193daa922e438`
+- Web服务：已配置在 `.env` 文件中（勿提交到版本控制）
 
 ### 已知限制
 - VPS root 分区只读，只能写 /vol1

@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { queryOne, queryAll, run } = require('../db');
+const { queryOne, queryAll, run, forceSaveDB } = require('../db');
 const { requireAuth } = require('../middleware/auth');
 const { validateBody, schemas } = require('../middleware/validate');
 const { reverseGeocode } = require('../services/geocode');
@@ -13,6 +13,7 @@ router.post('/api/sos', requireAuth, async (req, res) => {
   const geoResult = await reverseGeocode(latitude, longitude);
   run('INSERT INTO sos_alerts (user_id, latitude, longitude, address) VALUES (?, ?, ?, ?)',
     [userId, latitude, longitude, geoResult.address]);
+  forceSaveDB();
   const user = queryOne('SELECT name FROM users WHERE id = ?', [userId]);
   const io = req.app.get('io');
   const circles = queryAll('SELECT circle_id FROM circle_members WHERE user_id = ?', [userId]);
@@ -39,6 +40,7 @@ router.put('/api/sos/:id/resolve', requireAuth, (req, res) => {
     )`, [req.userId, alert.user_id]);
   if (!isOwner && !isMember) return res.status(403).json({ error: '无权操作此SOS' });
   run('UPDATE sos_alerts SET status = ? WHERE id = ?', ['resolved', req.params.id]);
+  forceSaveDB();
   res.json({ ok: true });
 });
 
