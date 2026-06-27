@@ -1576,6 +1576,25 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin, Wi
         );
       }
     }));
+
+    // Socket 认证失败（token 被其他设备登录踢掉）：静默跳转登录页
+    _socketSubscriptions.add(_socketService.onAuthFailed.listen((_) async {
+      if (!mounted) return;
+      _socketService.disconnect();
+      _positionStream?.cancel();
+      _periodicSendTimer?.cancel();
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.remove('familymap_user');
+      if (mounted) {
+        Navigator.of(context).pushAndRemoveUntil(
+          MaterialPageRoute(builder: (_) => SplashScreen(
+            darkMode: _isDark,
+            onDarkModeChanged: widget.onDarkModeChanged,
+          )),
+          (route) => false,
+        );
+      }
+    }));
   }
 
   // ==================== 数据加载 ====================

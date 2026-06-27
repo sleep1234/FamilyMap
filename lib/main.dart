@@ -248,8 +248,15 @@ class _LoginPageState extends State<LoginPage> {
           )),
         );
       }
-    } on AuthExpiredException {
-      if (mounted) await handleAuthExpired();
+    } on AuthExpiredException catch (e) {
+      if (mounted) {
+        String msg = e.message;
+        if (msg.contains('用户名或密码错误') || msg.contains('已被占用') || msg.contains('未设置密码')) {
+          _showError(msg.contains('已被占用') ? '用户名已被占用，换一个试试' : msg);
+        } else {
+          await handleAuthExpired();
+        }
+      }
     } catch (e) {
       if (mounted) {
         String msg = e.toString();

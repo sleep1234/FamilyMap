@@ -40,6 +40,7 @@ class SocketService {
   StreamController<Map<String, dynamic>> _lowBatteryController = StreamController<Map<String, dynamic>>.broadcast();
   StreamController<Map<String, dynamic>> _homeStatusController = StreamController<Map<String, dynamic>>.broadcast();
   StreamController<Map<String, dynamic>> _forceLogoutController = StreamController<Map<String, dynamic>>.broadcast();
+  StreamController<void> _authFailedController = StreamController<void>.broadcast();
 
   /// 确保 Stream 控制器处于打开状态（重新登录后可能已被 dispose 关闭）
   void _ensureControllersOpen() {
@@ -58,6 +59,7 @@ class SocketService {
     if (_lowBatteryController.isClosed) _lowBatteryController = StreamController<Map<String, dynamic>>.broadcast();
     if (_homeStatusController.isClosed) _homeStatusController = StreamController<Map<String, dynamic>>.broadcast();
     if (_forceLogoutController.isClosed) _forceLogoutController = StreamController<Map<String, dynamic>>.broadcast();
+    if (_authFailedController.isClosed) _authFailedController = StreamController<void>.broadcast();
   }
 
   // 对外暴露的 Stream
@@ -76,6 +78,7 @@ class SocketService {
   Stream<Map<String, dynamic>> get onLowBattery => _lowBatteryController.stream;
   Stream<Map<String, dynamic>> get onHomeStatus => _homeStatusController.stream;
   Stream<Map<String, dynamic>> get onForceLogout => _forceLogoutController.stream;
+  Stream<void> get onAuthFailed => _authFailedController.stream;
 
   /// 是否已连接
   bool get isConnected => _socket?.connected == true;
@@ -127,6 +130,18 @@ class SocketService {
 
     _socket!.on('disconnect', (_) {
       _isReconnecting = true;
+    });
+
+    // 认证失败（token 无效/过期）：停止重连，通知上层跳转登录页
+    _socket!.on('connect_error', (data) {
+      final msg = data?.toString() ?? '';
+      if (msg.contains('Invalid') || msg.contains('expired') || msg.contains('Authentication')) {
+        _socket?.disconnect();
+        _socket?.reconnection = false;
+        if (!_authFailedController.isClosed) {
+          _authFailedController.add(null);
+        }
+      }
     });
 
     // 位置更新
@@ -312,5 +327,6 @@ class SocketService {
     _lowBatteryController.close();
     _homeStatusController.close();
     _forceLogoutController.close();
+    _authFailedController.close();
   }
 }
