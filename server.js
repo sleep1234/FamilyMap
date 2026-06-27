@@ -76,7 +76,6 @@ const locationLimiter = rateLimit({
 });
 app.use('/api/users/:userId/locations', locationLimiter);
 
-app.use(express.static(path.join(__dirname, 'public')));
 // uploads 需要认证访问（头像和音频文件）
 app.use('/uploads', optionalAuth, (req, res, next) => {
   // 允许预设头像（/uploads/presets/）公开访问

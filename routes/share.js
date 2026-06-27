@@ -44,8 +44,8 @@ router.get('/share/:token', shareApiLimiter, (req, res) => {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
 <title>${escapeHtml(user?.name) || '家人'}的位置 - FamilyMap</title>
-<link rel="stylesheet" href="/lib/leaflet/leaflet.css"/>
-<script src="/lib/leaflet/leaflet.js"></script>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC',sans-serif;background:#0f172a;color:#e2e8f0;height:100vh;display:flex;flex-direction:column}
