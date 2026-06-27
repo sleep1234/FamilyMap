@@ -11,7 +11,7 @@ AIGC:
 
 # FamilyMap 技术说明文档
 
-> 版本：v1.0 | 更新日期：2026-06-19
+> 版本：v1.1 | 更新日期：2026-06-27
 
 ---
 
@@ -40,6 +40,7 @@ FamilyMap/
 │   │   ├── notification_service.dart  # 本地通知
 │   │   ├── gps_debug_logger.dart # GPS 调试日志
 │   │   ├── local_cache_service.dart   # 本地数据缓存
+│   │   ├── tile_cache_service.dart    # 地图瓦片缓存
 │   │   └── image_cache_service.dart   # 图片本地缓存
 │   ├── screens/
 │   │   ├── map_screen.dart       # 主地图页面（~4100行）
@@ -241,7 +242,7 @@ SOS、围栏进入/离开、低电量、碰撞、未活跃、到家/离家、停
 class AppConfig {
   static const String serverHost = 'www.zhp98.fun';
   static const int httpPort = 8090;
-  static const bool useHttps = false;
+  static const bool useHttps = true;
   static const String? customDns = '223.5.5.5';
 }
 ```
@@ -257,7 +258,8 @@ class AppConfig {
 | 场景 | 策略 |
 |------|------|
 | Socket 断连 | 指数退避重连（1s→2s→4s→...→30s） |
-| HTTP 请求失败 | 10秒超时 + 状态码检查 |
+| Socket 认证失败 | 停止重连，通知上层跳转登录页 |
+| HTTP 请求失败 | 15秒超时 + 状态码检查 |
 | 离线位置 | 本地缓存位置坐标，联网后补传 |
 | DNS 解析失败 | 系统 DNS → 自定义 DNS fallback |
 
@@ -277,7 +279,9 @@ class AppConfig {
 | 头像加载失败 | onError 静默降级为颜色+首字母 |
 | GPS 未定位 | 显示缓存位置 + "GPS 搜索中..." |
 | 无成员 | 显示引导按钮"邀请加入" |
-| 服务端 401 | 自动清除 token，跳回登录页（防重入锁） |
+| 服务端 401（token 过期） | 自动清除 token，跳回登录页（防重入锁） |
+| 服务端 401（登录失败） | 正确显示"用户名或密码错误"等提示，不触发登出流程 |
+| Socket 认证失败 | `connect_error` 事件检测认证错误，断开连接并跳转登录页 |
 
 ### 4.4 通知冗余
 
@@ -313,14 +317,12 @@ class AppConfig {
 
 ### 部署流程
 1. 修改代码 → 推送 GitHub（Actions 自动构建 APK/IPA）
-2. 上传 APK：paramiko → `/vol1/1000/app-debug.apk`
-3. 重启服务器：paramiko → kill + nohup node server.js
+2. 重启服务器：`pm2 restart familymap --update-env`
 
 ### 高德 API Key
 - Web服务：已配置在 `.env` 文件中（勿提交到版本控制）
 
 ### 已知限制
 - VPS root 分区只读，只能写 /vol1
-- PM2 不可用，用 nohup 直接运行
 - GitHub HTTPS 不通，用 REST API + token 推送
 - 无 Apple 开发者证书，iOS 通过 TrollStore 免签安装
