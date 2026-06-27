@@ -27,12 +27,12 @@ jobs:
       - name: Flutter dependencies
         run: flutter pub get
 
-      - name: Build APK (debug)
-        run: flutter build apk --debug
+      - name: Build APK (debug, arm64 only)
+        run: flutter build apk --debug --split-per-abi --target-platform android-arm64
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: FamilyMap-debug-apk
-          path: build/app/outputs/flutter-apk/app-debug.apk
+          path: build/app/outputs/flutter-apk/app-*-arm64-v8a-debug.apk
           retention-days: 30
