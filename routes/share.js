@@ -74,7 +74,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC',sans-
 <div class="expired" id="expired">链接已过期，请向分享者索要新的链接</div>
 <script>
 var lat0=${gcjCoords.lat},lng0=${gcjCoords.lng},token=${JSON.stringify(req.params.token)},trackMode=${data.trackMode ? 'true' : 'false'},expiresAt=${data.expires};
-var userName='${escapeHtml(user?.name) || '家人'}',userColor='${user?.avatar_color || '#3b82f6'}';
+var userName=${JSON.stringify(escapeHtml(user?.name) || '家人')},userColor=${JSON.stringify(user?.avatar_color || '#3b82f6')};
 var map=L.map('map',{zoomControl:false,attributionControl:false}).setView([lat0,lng0],16);
 L.control.zoom({position:'topright'}).addTo(map);
 L.tileLayer('https://webrd0{s}.is.autonavi.com/appmaptile?lang=zh_cn&size=1&scale=1&style=8&x={x}&y={y}&z={z}',{

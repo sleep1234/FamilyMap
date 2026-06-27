@@ -10,7 +10,7 @@ class DnsHttpClient {
   static Future<http.Client> create() async {
     final ioHttpClient = HttpClient()
       ..badCertificateCallback = (cert, host, port) {
-        return host == 'www.zhp98.fun';
+        return host == AppConfig.serverHost;
       };
     return IOClient(ioHttpClient);
   }

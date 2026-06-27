@@ -24,7 +24,7 @@ router.post('/api/register', validateBody(schemas.register), async (req, res) =>
     const token = createSession(id, 'register');
     res.json({ id, name, avatar_color, username, token });
   } catch (e) {
-    res.status(500).json({ error: '注册失败: ' + e.message });
+    res.status(500).json({ error: '注册失败，请稍后重试' });
   }
 });
 

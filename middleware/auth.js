@@ -1,4 +1,4 @@
-const { queryOne, queryAll } = require('../db');
+const { queryOne, queryAll, verifySession } = require('../db');
 
 let _queryOne = queryOne;
 let _queryAll = queryAll;
@@ -20,11 +20,12 @@ function requireAuth(req, res, next) {
   if (!_queryOne) {
     return res.status(500).json({ error: '认证模块未初始化' });
   }
-  const session = _queryOne('SELECT user_id FROM sessions WHERE token = ?', [token]);
-  if (!session) {
+  // 使用 verifySession 统一检查过期（7天）并更新 last_active
+  const userId = verifySession(token);
+  if (!userId) {
     return res.status(401).json({ error: '会话已过期，请重新登录' });
   }
-  req.userId = session.user_id;
+  req.userId = userId;
   req.token = token;
   next();
 }
@@ -70,9 +71,9 @@ function optionalAuth(req, res, next) {
   if (authHeader && authHeader.startsWith('Bearer ')) {
     const token = authHeader.substring(7);
     if (_queryOne && token) {
-      const session = _queryOne('SELECT user_id FROM sessions WHERE token = ?', [token]);
-      if (session) {
-        req.userId = session.user_id;
+      const userId = verifySession(token);
+      if (userId) {
+        req.userId = userId;
         req.token = token;
       }
     }
