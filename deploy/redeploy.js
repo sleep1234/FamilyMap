@@ -3,7 +3,7 @@ const ssh = new NodeSSH();
 var remotePath = '/vol1/1000/9自己的软件项目/家庭位置共享';
 
 async function run() {
-  await ssh.connect({ host: 'www.zhp0104.fun', port: 22, username: 'root', password: 'Zhp199802!' });
+  await ssh.connect({ host: 'www.zhp98.fun', port: 22, username: 'root', password: 'Zhp199802!' });
   
   // 删除旧数据库
   await ssh.execCommand('rm -f "' + remotePath + '/familymap.db" 2>/dev/null');

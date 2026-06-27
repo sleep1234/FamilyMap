@@ -225,14 +225,17 @@ function registerSocketHandlers(io) {
       if (!checkEventThrottle('interaction:care')) return;
       const info = onlineUsers.get(socket.id);
       if (!info) return;
-      // 安全修复：userId 从 socket 鉴权中取
       const userId = socket.data.userId;
       const user = queryOne('SELECT avatar_url, name FROM users WHERE id = ?', [userId]);
       const targetUserId = data.targetUserId;
       
       if (targetUserId) {
-        // 定向推送：只推送给目标用户
-        // 找到目标用户的 socket
+        // 验证目标用户是否在同一圈子
+        const inCircle = queryOne(
+          'SELECT 1 FROM circle_members WHERE user_id = ? AND circle_id IN (SELECT circle_id FROM circle_members WHERE user_id = ?) LIMIT 1',
+          [userId, targetUserId]
+        );
+        if (!inCircle) return; // 非圈子成员，忽略
         for (const [sid, memberInfo] of onlineUsers.entries()) {
           if (memberInfo.userId === targetUserId) {
             socket.to(sid).emit('interaction:care', {
@@ -244,10 +247,8 @@ function registerSocketHandlers(io) {
             break;
           }
         }
-        // Bark 推送给目标用户（如果离线）
         notifyCare(userId, [targetUserId], user?.name || '某人');
       } else {
-        // 兼容旧版：广播给所有圈子成员
         info.circleIds.forEach(cid => {
           socket.to(cid).emit('interaction:care', {
             fromUserId: userId,
@@ -256,7 +257,6 @@ function registerSocketHandlers(io) {
             timestamp: Date.now()
           });
         });
-        // Bark 推送"想你"通知给同圈子其他成员（离线也能收到）
         notifyCare(userId, info.circleIds, user?.name || '某人');
       }
     });

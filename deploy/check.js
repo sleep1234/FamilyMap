@@ -4,7 +4,7 @@ const ssh = new NodeSSH();
 
 async function check() {
   await ssh.connect({
-    host: 'www.zhp0104.fun',
+    host: 'www.zhp98.fun',
     port: 22,
     username: 'root',
     password: 'Zhp199802!',

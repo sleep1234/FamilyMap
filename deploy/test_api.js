@@ -3,7 +3,7 @@ const ssh = new NodeSSH();
 
 async function main() {
   await ssh.connect({
-    host: 'www.zhp0104.fun',
+    host: 'www.zhp98.fun',
     port: 22,
     username: 'root',
     password: 'Zhp199802!'
@@ -23,7 +23,7 @@ async function main() {
   }
 
   // Test external access
-  const extResult = await ssh.execCommand('curl -s -X POST http://www.zhp0104.fun:8090/api/users -H "Content-Type: application/json" -d \'{"name":"ExternalTest"}\'');
+  const extResult = await ssh.execCommand('curl -s -X POST http://www.zhp98.fun:8090/api/users -H "Content-Type: application/json" -d \'{"name":"ExternalTest"}\'');
   console.log(`External POST /api/users: ${extResult.stdout?.substring(0, 200) || extResult.stderr}`);
 
   await ssh.dispose();

@@ -6,7 +6,7 @@ const fs = require('fs');
 const ssh = new NodeSSH();
 
 const CONFIG = {
-  host: 'www.zhp0104.fun',
+  host: 'www.zhp98.fun',
   port: 22,
   username: 'root',
   password: 'Zhp199802!',
