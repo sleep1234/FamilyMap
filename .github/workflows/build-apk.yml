@@ -30,9 +30,12 @@ jobs:
       - name: Build APK (debug, arm64 only)
         run: flutter build apk --debug --split-per-abi --target-platform android-arm64
 
+      - name: List build outputs
+        run: ls -la build/app/outputs/flutter-apk/
+
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
           name: FamilyMap-debug-apk
-          path: build/app/outputs/flutter-apk/app-*-arm64-v8a-debug.apk
+          path: build/app/outputs/flutter-apk/app-arm64-v8a-debug.apk
           retention-days: 30
