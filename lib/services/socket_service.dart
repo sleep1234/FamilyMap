@@ -132,12 +132,12 @@ class SocketService {
       _isReconnecting = true;
     });
 
-    // 认证失败（token 无效/过期）：停止重连，通知上层跳转登录页
+    // 认证失败（token 无效/过期）：断开连接，通知上层跳转登录页
     _socket!.on('connect_error', (data) {
       final msg = data?.toString() ?? '';
       if (msg.contains('Invalid') || msg.contains('expired') || msg.contains('Authentication')) {
         _socket?.disconnect();
-        _socket?.reconnection = false;
+        _socket = null;
         if (!_authFailedController.isClosed) {
           _authFailedController.add(null);
         }
