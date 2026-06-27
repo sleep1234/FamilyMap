@@ -1,4 +1,4 @@
-﻿import 'dart:io';
+import 'dart:io';
 import 'dart:typed_data';
 import 'dart:ui';
 import 'dart:convert';
@@ -43,7 +43,15 @@ class NotificationService {
   Future<void> init() async {
     if (_initialized) return;
     const androidSettings = AndroidInitializationSettings('@mipmap/ic_launcher');
-    const initSettings = InitializationSettings(android: androidSettings);
+    const darwinSettings = DarwinInitializationSettings(
+      requestAlertPermission: false,
+      requestBadgePermission: false,
+      requestSoundPermission: false,
+    );
+    const initSettings = InitializationSettings(
+      android: androidSettings,
+      iOS: darwinSettings,
+    );
     await _plugin.initialize(
       settings: initSettings,
       onDidReceiveNotificationResponse: _onNotificationTapped,
@@ -159,13 +167,22 @@ class NotificationService {
       showWhen: false,
       silent: true,
     );
-    const details = NotificationDetails(android: androidDetails);
-    await _plugin.show(
-      id: _foregroundNotificationId,
-      title: title,
-      body: body,
-      notificationDetails: details,
+    const darwinDetails = DarwinNotificationDetails(
+      presentAlert: false,
+      presentBadge: false,
+      presentSound: false,
     );
+    const details = NotificationDetails(android: androidDetails, iOS: darwinDetails);
+    try {
+      await _plugin.show(
+        id: _foregroundNotificationId,
+        title: title,
+        body: body,
+        notificationDetails: details,
+      );
+    } catch (e) {
+      debugPrint('[通知] 前台通知失败: $e');
+    }
   }
 
   Future<void> cancelForegroundNotification() async {
