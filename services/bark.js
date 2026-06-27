@@ -8,6 +8,7 @@ const http = require('http');
 const { queryAll, queryOne } = require('../db');
 
 const BARK_BASE = 'https://api.day.app';
+const BARK_ICON = 'https://www.zhp98.fun:8090/uploads/presets/bark_icon.png';
 
 /**
  * HTTP POST 请求（Bark 推荐方式，支持更多参数）
@@ -91,6 +92,7 @@ async function sendBarkToUsers(targetUserIds, title, body, options = {}) {
         device_key: barkKey,
         title,
         body,
+        icon: options.icon || BARK_ICON,
         group: options.group || 'familymap',
       };
       if (options.sound) payload.sound = options.sound;
