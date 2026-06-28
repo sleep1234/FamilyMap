@@ -26,27 +26,17 @@
 	<string>$(FLUTTER_BUILD_NUMBER)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
-
-	<!-- ==================== App Transport Security ==================== -->
-	<!-- 允许 HTTP 明文请求（后端服务运行在 HTTP 端口） -->
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsArbitraryLoads</key>
 		<true/>
 	</dict>
-
-	<!-- ==================== 定位权限描述 ==================== -->
-	<!-- 使用时定位（必须，最基本的定位权限） -->
 	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>FamilyMap 需要获取您的位置，以便与家人朋友共享实时位置</string>
-	<!-- 始终定位（后台持续追踪必须） -->
+	<string>FamilyMap 需要获取您的位置，以便向家人共享实时位置</string>
 	<key>NSLocationAlwaysUsageDescription</key>
-	<string>FamilyMap 需要始终获取您的位置，以便在后台持续与家人共享位置</string>
-	<!-- iOS 11+ 合并描述（必须添加，否则无法请求 always 权限） -->
+	<string>FamilyMap 需要持续获取您的位置，以便在后台向家人共享位置</string>
 	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
-	<string>FamilyMap 需要获取您的位置，以便与家人朋友实时共享位置，包括在后台时</string>
-
-	<!-- ==================== 后台模式 ==================== -->
+	<string>FamilyMap 需要获取您的位置，以便向家人共享实时位置，包括在后台时</string>
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>location</string>
@@ -54,54 +44,14 @@
 		<string>processing</string>
 		<string>audio</string>
 	</array>
-
-	<!-- 允许后台位置更新（iOS 关键配置） -->
-	<key>UIBackgroundMode-location</key>
-	<true/>
-
-	<!-- ==================== 其他权限 ==================== -->
-	<!-- 麦克风（语音消息） -->
 	<key>NSMicrophoneUsageDescription</key>
-	<string>FamilyMap 需要使用麦克风来录制语音消息</string>
-	<!-- 相册/图片（头像选择） -->
+	<string>FamilyMap 需要使用麦克风录制语音消息</string>
 	<key>NSPhotoLibraryUsageDescription</key>
-	<string>FamilyMap 需要访问相册来选择头像</string>
-	<!-- 相机（拍照头像） -->
+	<string>FamilyMap 需要访问相册以选择头像</string>
 	<key>NSCameraUsageDescription</key>
-	<string>FamilyMap 需要使用相机来拍摄头像</string>
-
-	<!-- ==================== 通知 ==================== -->
-	<key>UIUserNotificationSettings</key>
-	<dict>
-		<key>UIUserNotificationTypeAlert</key>
-		<true/>
-		<key>UIUserNotificationTypeBadge</key>
-		<true/>
-		<key>UIUserNotificationTypeSound</key>
-		<true/>
-	</dict>
-
-	<key>UIApplicationSceneManifest</key>
-	<dict>
-		<key>UIApplicationSupportsMultipleScenes</key>
-		<false/>
-		<key>UISceneConfigurations</key>
-		<dict>
-			<key>UIWindowSceneSessionRoleApplication</key>
-			<array>
-				<dict>
-					<key>UISceneClassName</key>
-					<string>UIWindowScene</string>
-					<key>UISceneConfigurationName</key>
-					<string>flutter</string>
-					<key>UISceneDelegateClassName</key>
-					<string>$(PRODUCT_MODULE_NAME).SceneDelegate</string>
-					<key>UISceneStoryboardFile</key>
-					<string>Main</string>
-				</dict>
-			</array>
-		</dict>
-	</dict>
+	<string>FamilyMap 需要使用相机拍摄头像</string>
+	<key>UIApplicationSupportsMultipleScenes</key>
+	<false/>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
 	<key>UILaunchStoryboardName</key>
