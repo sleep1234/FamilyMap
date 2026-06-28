@@ -37,7 +37,7 @@ function _httpPost(url, body) {
       });
     });
     req.on('error', reject);
-    req.setTimeout(10000, () => { req.destroy(); reject(new Error('timeout')); });
+    req.setTimeout(5000, () => { req.destroy(); reject(new Error('timeout')); });
     req.write(data);
     req.end();
   });
@@ -66,7 +66,7 @@ function _httpGet(url) {
       });
     });
     req.on('error', reject);
-    req.setTimeout(10000, () => { req.destroy(); reject(new Error('timeout')); });
+    req.setTimeout(5000, () => { req.destroy(); reject(new Error('timeout')); });
   });
 }
 
