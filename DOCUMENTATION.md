@@ -11,7 +11,7 @@ AIGC:
 
 # FamilyMap 技术说明文档
 
-> 版本：v1.1 | 更新日期：2026-06-27
+> 版本：v1.2 | 更新日期：2026-06-28
 
 ---
 
@@ -300,6 +300,8 @@ class AppConfig {
 | 通知 | flutter_local_notifications | flutter_local_notifications |
 | 推送 | Bark | Bark（同 Android） |
 | 云构建 | 本地 adb push | GitHub Actions IPA + TrollStore |
+| 通知权限 | 自动授权 | DarwinInitializationSettings + IOSFlutterLocalNotificationsPlugin |
+| 运动数据 | 无 | NSMotionUsageDescription (activity_recognition_flutter) |
 | DNS | 系统级 | 应用级 |
 
 ---

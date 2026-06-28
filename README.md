@@ -89,7 +89,7 @@ AIGC:
 
 ```
 ┌─────────────────────────────────────────────┐
-│              Flutter App (Android)           │
+│          Flutter App (Android / iOS)         │
 │                                             │
 │  map_screen.dart ──── Socket.io Client      │
 │  settings_screen.dart ─── HTTP REST         │
@@ -143,6 +143,13 @@ FamilyMap/
 │   └── app/src/main/
 │       ├── AndroidManifest.xml
 │       └── kotlin/.../MainActivity.kt
+├── ios/                       # iOS 原生配置
+│   ├── Podfile                # CocoaPods 依赖
+│   ├── Runner/
+│   │   ├── AppDelegate.swift  # 应用入口
+│   │   ├── Info.plist         # 权限声明（位置/通知/运动/相机等）
+│   │   └── SceneDelegate.swift
+│   └── Runner.xcodeproj/
 ├── lib/                       # Flutter 应用代码
 │   ├── main.dart              # 入口（暗黑模式、路由）
 │   ├── models/
@@ -177,6 +184,8 @@ FamilyMap/
 | Node.js | 18+ |
 | Python | 3.8+（仅 upload_server.py 需要） |
 | Android SDK | API 24~36 |
+| Xcode | 15+ (iOS 构建) |
+| CocoaPods | iOS 原生插件依赖管理 |
 
 ### 第三方服务
 
@@ -197,11 +206,19 @@ dependencies:
   provider: ^6.1.2            # 状态管理
   shared_preferences: ^2.3.3  # 本地存储
   flutter_slidable: ^3.1.1    # 滑动操作
+  share_plus: ^10.1.4         # 分享
   uuid: ^4.5.1                # 唯一ID
   intl: ^0.20.1               # 国际化
-  activity_recognition_flutter: ^6.0.0  # 活动识别
+  crypto: ^3.0.3              # 加密
+  activity_recognition_flutter: ^6.0.0  # 活动识别（需 NSMotionUsageDescription）
   polylabel: ^1.0.1           # 多边形极点
   path_provider: ^2.1.5       # 文件路径
+  battery_plus: ^7.0.0        # 电池状态
+  flutter_local_notifications: ^22.0.0  # 本地通知
+  image_picker: ^1.2.2        # 图片选择
+  record: ^7.1.0              # 录音
+  audioplayers: ^6.7.1        # 音频播放
+  flutter_app_badger: ^1.5.0  # 桌面角标
 ```
 
 ### Node.js 依赖
@@ -498,13 +515,20 @@ flutter build apk --release
 
 ## 常见问题与已知坑
 
+### iOS 相关
+
+1. **安装后闪退**：Info.plist 不能包含无效 key（如 `UIUserNotificationSettings`），`activity_recognition_flutter` 必须声明 `NSMotionUsageDescription`
+2. **通知不显示**：`DarwinInitializationSettings` 中 `requestAlertPermission` 必须为 `true`，并需通过 `IOSFlutterLocalNotificationsPlugin` 显式请求权限
+3. **Podfile 缺失**：原生插件（geolocator、battery_plus 等）需要 CocoaPods 依赖，`flutter pub get` 后需在 `ios/` 目录执行 `pod install`
+4. **Bark 推送超时**：后台推送依赖 Bark 服务，需在 App 设置中配置 Bark Key
+
 ### Flutter 相关
 
-1. **中文路径崩溃**：Flutter 分析器在包含中文的路径下会崩溃，项目路径必须全英文。
-2. **`ListView.builder(shrinkWrap: true)` + 动画列表项**：会导致 Sliver assertion 崩溃，改用 `SingleChildScrollView` + `Column`。
-3. **`AnimationController` 在频繁重建的列表项中**：导致 `_elements.contains(element)` 崩溃，改用隐式动画组件。
-4. **`AnimatedBuilder` 冲突**：Flutter 内置了 `AnimatedBuilder`，自定义的需要改名为 `TrailAnimatedBuilder`。
-5. **成员卡片溢出**：`ListTile` 的 subtitle Column 内容过多时溢出，需改用手动 `Row` + `Expanded` 布局。
+5. **中文路径崩溃**：Flutter 分析器在包含中文的路径下会崩溃，项目路径必须全英文。
+6. **`ListView.builder(shrinkWrap: true)` + 动画列表项**：会导致 Sliver assertion 崩溃，改用 `SingleChildScrollView` + `Column`。
+7. **`AnimationController` 在频繁重建的列表项中**：导致 `_elements.contains(element)` 崩溃，改用隐式动画组件。
+8. **`AnimatedBuilder` 冲突**：Flutter 内置了 `AnimatedBuilder`，自定义的需要改名为 `TrailAnimatedBuilder`。
+9. **成员卡片溢出**：`ListTile` 的 subtitle Column 内容过多时溢出，需改用手动 `Row` + `Expanded` 布局。
 
 ### GPS 相关
 
