@@ -26,17 +26,23 @@
 	<string>$(FLUTTER_BUILD_NUMBER)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+
+	<!-- App Transport Security -->
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsArbitraryLoads</key>
 		<true/>
 	</dict>
+
+	<!-- Location Permissions -->
 	<key>NSLocationWhenInUseUsageDescription</key>
-	<string>FamilyMap 需要获取您的位置，以便向家人共享实时位置</string>
+	<string>FamilyMap needs your location to share real-time position with family members.</string>
 	<key>NSLocationAlwaysUsageDescription</key>
-	<string>FamilyMap 需要持续获取您的位置，以便在后台向家人共享位置</string>
+	<string>FamilyMap needs continuous location access to share your position with family in the background.</string>
 	<key>NSLocationAlwaysAndWhenInUseUsageDescription</key>
-	<string>FamilyMap 需要获取您的位置，以便向家人共享实时位置，包括在后台时</string>
+	<string>FamilyMap needs your location to share real-time position with family, including when running in background.</string>
+
+	<!-- Background Modes -->
 	<key>UIBackgroundModes</key>
 	<array>
 		<string>location</string>
@@ -44,14 +50,26 @@
 		<string>processing</string>
 		<string>audio</string>
 	</array>
+
+	<!-- Microphone (record plugin) -->
 	<key>NSMicrophoneUsageDescription</key>
-	<string>FamilyMap 需要使用麦克风录制语音消息</string>
+	<string>FamilyMap needs microphone access to record voice messages.</string>
+
+	<!-- Camera & Photo Library (image_picker plugin) -->
 	<key>NSPhotoLibraryUsageDescription</key>
-	<string>FamilyMap 需要访问相册以选择头像</string>
+	<string>FamilyMap needs photo library access to select profile avatars.</string>
 	<key>NSCameraUsageDescription</key>
-	<string>FamilyMap 需要使用相机拍摄头像</string>
-	<key>UIApplicationSupportsMultipleScenes</key>
-	<false/>
+	<string>FamilyMap needs camera access to take profile photos.</string>
+
+	<!-- Motion & Fitness (activity_recognition_flutter plugin - REQUIRED) -->
+	<key>NSMotionUsageDescription</key>
+	<string>FamilyMap needs motion data to detect your activity (walking, driving, etc.) and share status with family.</string>
+
+	<!-- FaceID (if needed) -->
+	<key>NSFaceIDUsageDescription</key>
+	<string>FamilyMap uses FaceID for secure authentication.</string>
+
+	<!-- App lifecycle -->
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
 	<key>UILaunchStoryboardName</key>
