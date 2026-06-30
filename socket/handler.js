@@ -110,34 +110,20 @@ function registerSocketHandlers(io) {
         emitLng += (Math.random() - 0.5) * 0.01;
       }
 
+      // 先用缓存地址或上次地址立即构建 payload，不等逆地理编码
       let address = '';
       const now = Date.now();
-      const lastCall = getGeocodeLastCall(userId);
-      if (now - lastCall > config.GEOCODE_THROTTLE_MS) {
-        setGeocodeThrottle(userId, now);
-        const geoResult = await reverseGeocode(latitude, longitude);
-        address = geoResult.address || geoResult.formatted || '';
-        if (!address || /^\d+\.\d+,\s*\d+\.\d+$/.test(address)) {
-          const lastAddr = queryOne(
-            "SELECT address FROM locations WHERE user_id = ? AND address IS NOT NULL AND address != '' AND address NOT GLOB '*[0-9].[0-9]*' ORDER BY recorded_at DESC LIMIT 1",
-            [userId]
-          );
-          address = lastAddr?.address || address;
-        }
-        updateStay(userId, latitude, longitude, address, speed);
-      } else {
-        const cached = queryOne('SELECT address, formatted FROM geocode_cache WHERE lat_key = ? AND lng_key = ?',
-          [latitude.toFixed(3), longitude.toFixed(3)]);
-        address = cached?.address || cached?.formatted || '';
-        if (!address) {
-          const lastAddr = queryOne(
-            "SELECT address FROM locations WHERE user_id = ? AND address IS NOT NULL AND address != '' ORDER BY recorded_at DESC LIMIT 1",
-            [userId]
-          );
-          address = lastAddr?.address || '';
-        }
-        updateStay(userId, latitude, longitude, address, speed);
+      const cached = queryOne('SELECT address, formatted FROM geocode_cache WHERE lat_key = ? AND lng_key = ?',
+        [latitude.toFixed(3), longitude.toFixed(3)]);
+      address = cached?.address || cached?.formatted || '';
+      if (!address) {
+        const lastAddr = queryOne(
+          "SELECT address FROM locations WHERE user_id = ? AND address IS NOT NULL AND address != '' ORDER BY recorded_at DESC LIMIT 1",
+          [userId]
+        );
+        address = lastAddr?.address || '';
       }
+      updateStay(userId, latitude, longitude, address, speed);
 
       run('INSERT INTO locations (user_id, latitude, longitude, accuracy, battery_level, is_charging, speed, address) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
         [userId, emitLat, emitLng, accuracy || null, batteryLevel != null ? batteryLevel : null, isCharging ? 1 : 0, speed || 0, address]);
@@ -151,7 +137,6 @@ function registerSocketHandlers(io) {
       }
 
       const payload = { userId, latitude: emitLat, longitude: emitLng, accuracy, batteryLevel, isCharging, speed, address, timestamp: Date.now() };
-      // 携带拖尾皮肤设置
       if (userInfo?.trail_skin && userInfo.trail_skin !== 'default') {
         payload.trailSkin = userInfo.trail_skin;
       }
@@ -165,16 +150,29 @@ function registerSocketHandlers(io) {
       const ghostMode = userInfo?.ghost_mode || 'off';
       if (ghostMode === 'blur') payload.ghostMode = 'blur';
 
-      // DEBUG: 诊断位置分发
       const roomSockets = info.circleIds.length > 0 ? io.sockets.adapter.rooms.get(info.circleIds[0]) : null;
       const roomSize = roomSockets ? roomSockets.size : 0;
       console.log(`[位置分发] userId=${userId}, circles=${info.circleIds.length}, ghostMode=${ghostMode}, roomSize=${roomSize}, payload.accuracy=${accuracy}`);
 
+      // 立即分发位置，不等逆地理编码
       info.circleIds.forEach(cid => {
         if (ghostMode === 'invisible') return;
         socket.to(cid).emit('member:location', payload);
         socket.emit('member:location', payload);
       });
+
+      // 异步逆地理编码：获取新地址后更新 DB 记录（不阻塞分发）
+      const lastCall = getGeocodeLastCall(userId);
+      if (now - lastCall > config.GEOCODE_THROTTLE_MS) {
+        setGeocodeThrottle(userId, now);
+        reverseGeocode(latitude, longitude).then(geoResult => {
+          const newAddr = geoResult.address || geoResult.formatted || '';
+          if (newAddr && !/^\d+\.\d+,\s*\d+\.\d+$/.test(newAddr)) {
+            run('UPDATE locations SET address = ? WHERE user_id = ? AND id = (SELECT id FROM locations WHERE user_id = ? ORDER BY id DESC LIMIT 1)',
+              [newAddr, userId, userId]);
+          }
+        }).catch(() => {});
+      }
 
       if (!userInfo?.blur_location) {
         checkGeofence(userId, socket, latitude, longitude, info.circleIds);
@@ -235,7 +233,7 @@ function registerSocketHandlers(io) {
           'SELECT 1 FROM circle_members WHERE user_id = ? AND circle_id IN (SELECT circle_id FROM circle_members WHERE user_id = ?) LIMIT 1',
           [userId, targetUserId]
         );
-        if (!inCircle) return; // 非圈子成员，忽略
+        if (!inCircle) return;
         for (const [sid, memberInfo] of onlineUsers.entries()) {
           if (memberInfo.userId === targetUserId) {
             socket.to(sid).emit('interaction:care', {

@@ -35,12 +35,8 @@ class KeepAliveService : Service() {
 
     override fun onDestroy() {
         super.onDestroy()
-        val restartIntent = Intent(applicationContext, KeepAliveService::class.java)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            startForegroundService(restartIntent)
-        } else {
-            startService(restartIntent)
-        }
+        // 不在 onDestroy 中手动重启：START_STICKY 已让系统在资源充足时自动重启
+        // 手动重启会导致无限循环，浪费电量
     }
 
     companion object {

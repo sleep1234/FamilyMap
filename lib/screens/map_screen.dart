@@ -73,6 +73,9 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin, Wi
   // 页面可见性标记：push 子页面时设为 false，避免后台 setState 浪费重绘
   bool _isPageVisible = true;
 
+  // 后台状态标记：用于后台降低上报频率和省电
+  bool _isInBackground = false;
+
   // 地图层数据版本：MarkerLayer/CircleLayer/TrailParticle 只在这个版本变化时重建
   // GPS位置、Socket成员位置、围栏变更、逆地理等数据变化时递增
   // 其他 setState（面板Tab切换、Header按钮等）不会触发地图层重建
@@ -338,16 +341,26 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin, Wi
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.paused) {
-      // 进入后台：GPS 流和上报定时器继续运行（前台服务保障）
-      // 前后台策略一致：都根据速度自适应上报间隔（驾车1-2秒，步行5秒，静止15秒）
-      // 只暂停纯 UI 刷新类定时器，省电
+      // 进入后台：暂停所有非必要定时器，大幅降低耗电
+      _isInBackground = true;
       _memberRefreshTimer?.cancel();
       _stayTimer?.cancel();
-      // 强制缓存一次位置，确保后台切回时能快速恢复
+      // 暂停30fps插值动画（纯UI渲染，后台无用）
+      _interpolationTimer?.cancel();
+      // 暂停GPS流看门狗（后台无需监控GPS健康）
+      _gpsWatchdogTimer?.cancel();
+      // 暂停iOS电量轮询（电量变化缓慢，后台不需要10秒刷新）
+      if (Platform.isIOS) _iosBatteryTimer?.cancel();
+      // 暂停活动识别（后台已有上一次结果可用）
+      _activityStream?.cancel();
+      // 强制缓存一次位置
       _cachePosition(force: true);
-      debugPrint('[生命周期] 应用进入后台，上报间隔保持${_currentReportInterval.inSeconds}秒（自适应）');
+      // 立即切换到后台上报间隔（更长周期省电）
+      _updateReportInterval();
+      debugPrint('[生命周期] 应用进入后台，已暂停插值/看门狗/电量/活动识别，上报间隔已拉长');
     } else if (state == AppLifecycleState.resumed) {
-      // 回到前台：恢复 UI 定时器
+      _isInBackground = false;
+      // 回到前台：恢复所有定时器
       _memberRefreshTimer?.cancel();
       _memberRefreshTimer = Timer.periodic(const Duration(seconds: 30), (_) {
         if (_isPageVisible) _loadMembers();
@@ -358,9 +371,40 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin, Wi
           setState(() {});
         }
       });
-      // iOS 电池刷新
-      if (Platform.isIOS) _refreshBatteryIOS();
-      debugPrint('[生命周期] 应用回到前台，恢复定时器');
+      // 恢复30fps插值动画
+      _startInterpolationTimer();
+      // 恢复GPS看门狗
+      _gpsWatchdogTimer?.cancel();
+      _gpsWatchdogTimer = Timer.periodic(const Duration(seconds: 15), (_) {
+        if (!mounted) return;
+        final lastUpdate = _lastGpsUpdateTime;
+        final elapsed = lastUpdate != null
+            ? DateTime.now().difference(lastUpdate).inSeconds
+            : 999;
+        if (elapsed > 20) {
+          _gpsWatchdogRestarts++;
+          _gpsStreamActive = false;
+          _isLocationSharing = false;
+          try { _positionStream?.cancel(); } catch (_) {}
+          _positionStream = null;
+          if (mounted) setState(() {});
+          if (_gpsWatchdogRestarts > 3) {
+            _gpsWatchdogRestarts = 0;
+            _initLocation();
+            return;
+          }
+          _startLocationSharing();
+        } else {
+          if (_gpsWatchdogRestarts > 0) _gpsWatchdogRestarts = 0;
+        }
+      });
+      // 恢复iOS电量轮询
+      if (Platform.isIOS) _initBatteryIOS();
+      // 恢复活动识别
+      _initActivityRecognition();
+      // 恢复前台上报间隔（更短周期更实时）
+      _updateReportInterval();
+      debugPrint('[生命周期] 应用回到前台，已恢复所有定时器，上报间隔已恢复');
     }
   }
 
@@ -1058,28 +1102,39 @@ class _MapScreenState extends State<MapScreen> with TickerProviderStateMixin, Wi
     });
   }
 
-  /// 更新自适应上报频率（根据移动状态）
+  /// 更新自适应上报频率（根据移动状态，后台时拉长间隔省电）
   void _updateReportInterval() {
     final moveType = _getMovementType();
     Duration newInterval;
-    // 驾车时细分：速度>60km/h(16.7m/s)用1秒，否则2秒
-    if (moveType == MovementType.driving) {
-      final spd = _effectiveSpeed;
-      newInterval = spd > 16.7
-          ? const Duration(seconds: 1) // 高速1秒
-          : const Duration(seconds: 2); // 普通2秒
+    if (_isInBackground) {
+      // 后台：使用 2-3 倍于前台的间隔，大幅降低耗电
+      if (moveType == MovementType.driving) {
+        newInterval = const Duration(seconds: 5);  // 前台1-2s → 后台5s
+      } else if (moveType == MovementType.cycling || moveType == MovementType.walking) {
+        newInterval = const Duration(seconds: 15); // 前台5s → 后台15s
+      } else {
+        newInterval = const Duration(seconds: 30); // 前台15s → 后台30s
+      }
     } else {
-      switch (moveType) {
-        case MovementType.cycling:
-        case MovementType.walking:
-          newInterval = const Duration(seconds: 5); // 步行/骑行5秒
-          break;
-        case MovementType.still:
-          newInterval = const Duration(seconds: 15); // 静止15秒
-          break;
-        case MovementType.driving:
-          newInterval = const Duration(seconds: 2); // 兜底
-          break;
+      // 前台：原有自适应逻辑
+      if (moveType == MovementType.driving) {
+        final spd = _effectiveSpeed;
+        newInterval = spd > 16.7
+            ? const Duration(seconds: 1)
+            : const Duration(seconds: 2);
+      } else {
+        switch (moveType) {
+          case MovementType.cycling:
+          case MovementType.walking:
+            newInterval = const Duration(seconds: 5);
+            break;
+          case MovementType.still:
+            newInterval = const Duration(seconds: 15);
+            break;
+          case MovementType.driving:
+            newInterval = const Duration(seconds: 2);
+            break;
+        }
       }
     }
 
